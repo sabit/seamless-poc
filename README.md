@@ -122,6 +122,18 @@ chmod +x scripts/manage-volume.sh
 
 ## 🔍 Troubleshooting
 
+### Model Import Issues
+```bash
+# Test model availability before building
+python3 test_model.py
+
+# Check transformers version
+python3 -c "import transformers; print(transformers.__version__)"
+
+# Verify model exists on Hugging Face
+curl -I https://huggingface.co/facebook/seamless-m4t-large
+```
+
 ### Container won't start
 ```bash
 # Check Docker GPU support
@@ -132,6 +144,9 @@ docker logs seamless-translator-app
 
 # Verify port is available
 netstat -tlnp | grep :7860
+
+# Test model loading in container
+docker run --rm --gpus all seamless-translator python3 test_model.py
 ```
 
 ### Audio issues

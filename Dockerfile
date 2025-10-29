@@ -34,12 +34,17 @@ RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache
 VOLUME ["/app/model_cache"]
 
 # Pre-download and cache the SeamlessM4T model (only if cache is empty)
-RUN python -c "import os; from transformers import SeamlessM4Tv2ForSpeechToSpeech; \
-    if not os.path.exists('/app/model_cache/models--facebook--seamless-m4t-v2-large'): \
-        print('Downloading SeamlessM4T model...'); \
-        SeamlessM4Tv2ForSpeechToSpeech.from_pretrained('facebook/seamless-m4t-v2-large'); \
-    else: \
-        print('Model cache found, skipping download')"
+RUN python -c "import os; \
+    try: \
+        from transformers import SeamlessM4TModel, AutoProcessor; \
+        print('Downloading SeamlessM4T model and processor...'); \
+        model = SeamlessM4TModel.from_pretrained('facebook/seamless-m4t-large'); \
+        processor = AutoProcessor.from_pretrained('facebook/seamless-m4t-large'); \
+        print('Model download completed successfully'); \
+    except Exception as e: \
+        print(f'Model download failed: {e}'); \
+        print('Model will be downloaded at runtime instead'); \
+        exit(0)"
 
 # Expose port
 EXPOSE 7860

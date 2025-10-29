@@ -33,6 +33,6 @@
     "container_name": "seamless-translator-app",
     "image_name": "seamless-translator",
     "supported_languages": ["eng", "ben"],
-    "model": "facebook/seamless-m4t-v2-large"
+    "model": "facebook/seamless-m4t-large"
   }
 }

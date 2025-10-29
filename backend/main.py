@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
-from transformers import SeamlessM4Tv2ForSpeechToSpeech, AutoProcessor
+from transformers import SeamlessM4TModel, AutoProcessor
 import io
 import wave
 import tempfile
@@ -35,12 +35,12 @@ class SeamlessTranslator:
         """Initialize the model asynchronously"""
         try:
             logger.info("Loading SeamlessM4T model...")
-            self.model = SeamlessM4Tv2ForSpeechToSpeech.from_pretrained(
-                "facebook/seamless-m4t-v2-large",
+            self.model = SeamlessM4TModel.from_pretrained(
+                "facebook/seamless-m4t-large",
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
             ).to(self.device)
             
-            self.processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
+            self.processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-large")
             logger.info("Model loaded successfully!")
             
         except Exception as e:
@@ -115,17 +115,22 @@ class SeamlessTranslator:
             inputs = self.processor(
                 audios=waveform,
                 src_lang=src_lang,
-                tgt_lang=tgt_lang,
                 return_tensors="pt"
             ).to(self.device)
             
-            # Generate translation
+            # Generate speech translation
             with torch.no_grad():
-                outputs = self.model.generate(**inputs, tgt_lang=tgt_lang)
+                outputs = self.model.generate(
+                    **inputs,
+                    tgt_lang=tgt_lang,
+                    generate_speech=True
+                )
             
             # Convert output to audio bytes
-            if outputs.waveform is not None:
+            if hasattr(outputs, 'waveform') and outputs.waveform is not None:
                 return self.tensor_to_audio_bytes(outputs.waveform.squeeze())
+            elif 'waveform' in outputs:
+                return self.tensor_to_audio_bytes(outputs['waveform'].squeeze())
             
             return None
             

@@ -10,7 +10,9 @@ This project implements a real-time speech-to-speech translation system using Me
 - Docker installed with GPU support (nvidia-docker2)
 - Port 7860 open in firewall
 
-### Deployment
+### Deployment Options
+
+#### Option 1: Native VM (Recommended - Faster)
 
 1. **Clone/Upload the project** to your VM:
    ```bash
@@ -21,22 +23,42 @@ This project implements a real-time speech-to-speech translation system using Me
    # Or upload the files directly to your VM
    ```
 
-2. **Test GPU setup** (recommended first):
+2. **Set up native environment**:
+   ```bash
+   chmod +x scripts/setup-native.sh
+   ./scripts/setup-native.sh
+   ```
+
+3. **Run the service**:
+   ```bash
+   chmod +x scripts/run-native.sh
+   ./scripts/run-native.sh
+   ```
+
+4. **Development mode** (auto-restart on changes):
+   ```bash
+   chmod +x scripts/dev-mode.sh
+   ./scripts/dev-mode.sh
+   ```
+
+#### Option 2: Docker (Alternative)
+
+1. **Test GPU setup**:
    ```bash
    chmod +x scripts/test-gpu.sh
    ./scripts/test-gpu.sh
    ```
 
-3. **Build and run**:
+2. **Build and run**:
    ```bash
    chmod +x scripts/build-and-run.sh
    ./scripts/build-and-run.sh
    ```
 
-3. **Access the web interface**:
-   ```
-   http://YOUR_VM_EXTERNAL_IP:7860
-   ```
+#### Access the Service
+```
+http://YOUR_VM_EXTERNAL_IP:7860
+```
 
 ### Usage
 

@@ -241,6 +241,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         manager.disconnect(client_id)
 
 if __name__ == "__main__":
+    import os
+    
+    # Print startup info
+    print("🚀 SeamlessStreaming Translation Service")
+    print(f"🐍 Python: {os.sys.version}")
+    print(f"⚡ CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+    print(f"📂 Model cache: {os.getenv('TRANSFORMERS_CACHE', 'default')}")
+    print("=" * 50)
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

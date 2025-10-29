@@ -58,9 +58,25 @@ def test_gpu_availability():
     print("\nTesting GPU availability...")
     
     if torch.cuda.is_available():
-        print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
-        print(f"   CUDA version: {torch.version.cuda}")
-        print(f"   GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        device_name = torch.cuda.get_device_name(0)
+        cuda_version = torch.version.cuda
+        device_props = torch.cuda.get_device_properties(0)
+        
+        print(f"✅ CUDA available: {device_name}")
+        print(f"   CUDA version: {cuda_version}")
+        print(f"   GPU memory: {device_props.total_memory / 1e9:.1f} GB")
+        print(f"   Compute capability: {device_props.major}.{device_props.minor}")
+        
+        # Check if it's a T4 GPU
+        if "T4" in device_name:
+            print("✅ NVIDIA T4 detected - optimized for inference")
+            
+        # Check CUDA version compatibility
+        if cuda_version and cuda_version.startswith("12"):
+            print("✅ CUDA 12.x detected - excellent compatibility")
+        elif cuda_version and cuda_version.startswith("11"):
+            print("⚠️  CUDA 11.x detected - should work but 12.x is recommended")
+        
         return True
     else:
         print("⚠️  CUDA not available, will use CPU")

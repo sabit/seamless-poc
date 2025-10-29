@@ -49,8 +49,23 @@ if ! docker info &> /dev/null; then
 fi
 
 # Check if NVIDIA Docker runtime is available
-if ! docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi &> /dev/null; then
-    print_warning "NVIDIA Docker runtime not available. GPU acceleration may not work."
+print_status "Checking NVIDIA Docker runtime and GPU access..."
+if nvidia-smi &> /dev/null; then
+    print_success "NVIDIA GPU driver is available"
+    
+    # Test if Docker can access GPUs using a simple image
+    if docker run --rm --gpus all ubuntu:20.04 nvidia-smi &> /dev/null; then
+        print_success "Docker GPU access is working"
+    elif docker run --rm --gpus all alpine:latest echo "GPU test" &> /dev/null; then
+        print_success "Docker --gpus flag is working"
+        print_warning "nvidia-smi not available in test container (this is normal)"
+    else
+        print_warning "Docker GPU access may not be properly configured"
+        print_status "Will attempt to build anyway - GPU access will be tested during container startup"
+    fi
+else
+    print_error "nvidia-smi not found. Please ensure NVIDIA drivers are installed"
+    print_status "Will attempt to build anyway, but GPU acceleration will not work"
 fi
 
 print_status "Stopping existing container if running..."
@@ -61,11 +76,16 @@ print_status "Creating Docker volume for model cache..."
 docker volume create $VOLUME_NAME 2>/dev/null || print_status "Volume already exists"
 
 print_status "Building Docker image..."
-docker build -t $IMAGE_NAME . --no-cache
+print_status "This may take several minutes on first build (downloading models)..."
 
-if [ $? -ne 0 ]; then
-    print_error "Docker build failed!"
-    exit 1
+# Build with cache first, fallback to no-cache if needed
+if ! docker build -t $IMAGE_NAME . ; then
+    print_warning "Build failed, retrying with --no-cache..."
+    if ! docker build -t $IMAGE_NAME . --no-cache; then
+        print_error "Docker build failed even with --no-cache!"
+        print_status "Check the error messages above for details"
+        exit 1
+    fi
 fi
 
 print_success "Docker image built successfully!"

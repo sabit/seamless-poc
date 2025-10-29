@@ -1,5 +1,5 @@
-# Use NVIDIA PyTorch runtime as base for GPU support
-FROM nvcr.io/nvidia/pytorch:23.08-py3
+# Use NVIDIA PyTorch runtime compatible with CUDA 12.x
+FROM nvcr.io/nvidia/pytorch:23.12-py3
 
 # Set working directory
 WORKDIR /app
@@ -26,6 +26,8 @@ COPY frontend/ ./frontend/
 ENV PYTHONPATH=/app
 ENV TRANSFORMERS_CACHE=/app/model_cache
 ENV HF_HOME=/app/model_cache
+ENV CUDA_VISIBLE_DEVICES=0
+ENV TORCH_CUDA_ARCH_LIST="7.5"
 
 # Create cache directory and set permissions
 RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache

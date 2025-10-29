@@ -6,7 +6,8 @@ This project implements a real-time speech-to-speech translation system using Me
 
 ### Prerequisites
 - GCP Compute Engine VM with T4 GPU (4vCPU, 16GB RAM)
-- Docker installed with GPU support
+- CUDA 12.4 (pre-installed on VM)
+- Docker installed with GPU support (nvidia-docker2)
 - Port 7860 open in firewall
 
 ### Deployment
@@ -20,7 +21,13 @@ This project implements a real-time speech-to-speech translation system using Me
    # Or upload the files directly to your VM
    ```
 
-2. **Build and run** (Linux/Mac):
+2. **Test GPU setup** (recommended first):
+   ```bash
+   chmod +x scripts/test-gpu.sh
+   ./scripts/test-gpu.sh
+   ```
+
+3. **Build and run**:
    ```bash
    chmod +x scripts/build-and-run.sh
    ./scripts/build-and-run.sh
@@ -71,10 +78,12 @@ seamless-poc/
 - **Responsive UI** with language swap functionality
 
 ### Model Configuration
-- **Model**: `facebook/seamless-m4t-v2-large`
+- **Base Image**: NVIDIA PyTorch 24.01 (CUDA 12.4 compatible)
+- **Model**: `facebook/seamless-m4t-large`
 - **Languages**: English (eng) ↔ Bangla (ben)
 - **Audio format**: 16kHz mono WAV
 - **Streaming**: 1-second audio chunks
+- **GPU**: Optimized for NVIDIA T4 with CUDA 12.4
 
 ## 🛠️ Management Commands
 
@@ -136,8 +145,9 @@ curl -I https://huggingface.co/facebook/seamless-m4t-large
 
 ### Container won't start
 ```bash
-# Check Docker GPU support
-docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
+# Check CUDA compatibility and GPU access
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1-base-ubuntu22.04 nvidia-smi
 
 # Check container logs
 docker logs seamless-translator-app

@@ -1,0 +1,11 @@
+# Minimal requirements - only install missing packages
+# This avoids conflicts with the gold image pre-installed packages
+
+python-multipart>=0.0.6
+torchaudio>=2.0.0
+transformers>=4.37.0
+accelerate>=0.25.0
+librosa>=0.10.1
+soundfile>=0.12.1
+sentencepiece>=0.1.99
+huggingface-hub>=0.16.0

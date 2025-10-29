@@ -92,19 +92,19 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 print_status "Verifying PyTorch CUDA installation..."
 python3 -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}'); print(f'GPU count: {torch.cuda.device_count()}')"
 
-# Install other Python packages
-print_status "Installing application dependencies..."
+# Install only missing packages (respecting gold image versions)
+print_status "Installing missing application dependencies..."
+print_status "Using gold image versions of: fastapi, uvicorn, websockets, aiofiles, torch, numpy, scipy"
+
 pip install \
-    fastapi==0.104.1 \
-    uvicorn[standard]==0.24.0 \
-    websockets==12.0 \
-    transformers==4.37.0 \
-    librosa==0.10.1 \
-    soundfile==0.12.1 \
-    python-multipart==0.0.6 \
-    aiofiles==23.2.1 \
-    sentencepiece==0.1.99 \
-    accelerate
+    python-multipart \
+    torchaudio \
+    transformers>=4.37.0 \
+    accelerate \
+    librosa \
+    soundfile \
+    sentencepiece \
+    huggingface-hub
 
 print_success "Python packages installed"
 

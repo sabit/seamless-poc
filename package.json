@@ -1,0 +1,38 @@
+{
+  "name": "seamless-streaming-translation",
+  "version": "1.0.0",
+  "description": "Real-time speech-to-speech translation using Meta SeamlessM4T",
+  "main": "backend/main.py",
+  "scripts": {
+    "build": "./scripts/build-and-run.sh",
+    "stop": "./scripts/stop.sh",
+    "logs": "docker logs -f seamless-translator-app"
+  },
+  "keywords": [
+    "speech-translation",
+    "real-time",
+    "seamless",
+    "websocket",
+    "fastapi",
+    "docker",
+    "gcp"
+  ],
+  "author": "SeamlessStreaming POC",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "your-repository-url"
+  },
+  "dependencies": {
+    "python": ">=3.8",
+    "docker": ">=20.0",
+    "nvidia-docker": ">=2.0"
+  },
+  "config": {
+    "port": 7860,
+    "container_name": "seamless-translator-app",
+    "image_name": "seamless-translator",
+    "supported_languages": ["eng", "ben"],
+    "model": "facebook/seamless-m4t-v2-large"
+  }
+}

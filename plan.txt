@@ -1,0 +1,75 @@
+🧩 Objective
+
+Demonstrate real-time speech-to-speech translation using Meta’s SeamlessStreaming model, deployed in Docker on a GCP Compute Engine VM, with a simple web client that streams microphone input and receives translated speech continuously.
+
+🪜 High-Level Task Plan
+1. Environment Setup
+
+Provision a GPU-enabled GCP Compute instance suitable for lightweight real-time inference.
+
+Install Docker and enable GPU access for containers.
+
+Open minimal required ports for secure browser communication (WebSocket or HTTPS).
+
+2. Model Integration
+
+Select the SeamlessStreaming model variant supporting live S2S translation.
+
+Prepare a containerized environment including model dependencies (PyTorch, Transformers, audio I/O libraries).
+
+Pre-load the model inside the container for faster startup and consistent inference.
+
+3. Streaming Backend
+
+Implement a lightweight backend (e.g., FastAPI with WebSocket support).
+
+Maintain a persistent model session for streaming inference.
+
+Handle continuous binary audio input, incremental translation, and synthesized speech output.
+
+Use small time-windowed chunks for smooth, low-latency streaming.
+
+Define basic message framing for language settings and control signals.
+
+4. Web Client
+
+Capture microphone audio in real time via the browser’s Web Audio API.
+
+Encode and stream small audio chunks to the backend over a WebSocket connection.
+
+Receive translated audio chunks from the backend and play them immediately using browser audio APIs.
+
+Keep UI minimal: start/stop control and language selection.
+
+5. Real-Time Flow
+
+User starts session in browser.
+
+Browser streams microphone audio continuously to backend.
+
+Backend processes incoming audio incrementally through SeamlessStreaming:
+
+Speech recognition
+
+Translation
+
+Speech synthesis
+
+Backend streams translated speech chunks back to browser for near-real-time playback.
+
+6. Deployment
+
+Package the backend and model into a single Docker image.
+
+Deploy the container on the GPU-enabled GCP VM.
+
+Expose the streaming endpoint securely for browser access.
+
+Validate end-to-end latency and translation quality.
+
+7. Optional POC Enhancements
+Focus	Enhancement
+User Experience	Display live transcribed text of input and translated output.
+Audio Quality	Add buffering or overlap smoothing between audio chunks.
+Languages	Allow configurable source/target language pairs.
+Interactivity	Enable quick restart/reset of the translation stream.

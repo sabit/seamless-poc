@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Speech Translation</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .language-controls {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .language-select {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        label {
+            font-weight: 600;
+            color: #555;
+        }
+        
+        select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            background: white;
+        }
+        
+        .swap-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: background-color 0.3s;
+        }
+        
+        .swap-btn:hover {
+            background: #0056b3;
+        }
+        
+        .record-controls {
+            text-align: center;
+        }
+        
+        .record-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin: 0 10px;
+        }
+        
+        .record-btn:hover {
+            background: #1e7e34;
+        }
+        
+        .record-btn.recording {
+            background: #dc3545;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .record-btn.recording:hover {
+            background: #c82333;
+        }
+        
+        .record-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+        
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .audio-controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .volume-slider {
+            width: 100px;
+        }
+        
+        .connection-status {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .connection-status.connected {
+            background: #28a745;
+            color: white;
+        }
+        
+        .connection-status.disconnected {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .connection-status.connecting {
+            background: #ffc107;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="connection-status" id="connectionStatus">Connecting...</div>
+        
+        <h1>🗣️ Real-time Speech Translation</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 30px;">
+            English ↔ Bangla Speech-to-Speech Translation
+        </p>
+        
+        <div class="controls">
+            <div class="language-controls">
+                <div class="language-select">
+                    <label for="sourceLanguage">From:</label>
+                    <select id="sourceLanguage">
+                        <option value="eng">English</option>
+                        <option value="ben">Bangla</option>
+                    </select>
+                </div>
+                
+                <button class="swap-btn" id="swapBtn" title="Swap languages">⇄</button>
+                
+                <div class="language-select">
+                    <label for="targetLanguage">To:</label>
+                    <select id="targetLanguage">
+                        <option value="ben">Bangla</option>
+                        <option value="eng">English</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="record-controls">
+                <button class="record-btn" id="recordBtn">🎤 Start Recording</button>
+                <button class="record-btn" id="stopBtn" style="display: none;">⏹️ Stop</button>
+            </div>
+            
+            <div class="audio-controls">
+                <div class="volume-control">
+                    <label for="outputVolume">Volume:</label>
+                    <input type="range" id="outputVolume" class="volume-slider" min="0" max="1" step="0.1" value="0.8">
+                    <span id="volumeValue">80%</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status info" id="statusMessage">
+            Click "Start Recording" to begin real-time translation
+        </div>
+    </div>
+
+    <script>
+        class SpeechTranslator {
+            constructor() {
+                this.websocket = null;
+                this.mediaRecorder = null;
+                this.audioStream = null;
+                this.isRecording = false;
+                this.audioContext = null;
+                this.clientId = Math.random().toString(36).substr(2, 9);
+                this.outputVolume = 0.8;
+                
+                this.initializeUI();
+                this.connectWebSocket();
+            }
+            
+            initializeUI() {
+                this.recordBtn = document.getElementById('recordBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.swapBtn = document.getElementById('swapBtn');
+                this.sourceLanguage = document.getElementById('sourceLanguage');
+                this.targetLanguage = document.getElementById('targetLanguage');
+                this.statusMessage = document.getElementById('statusMessage');
+                this.connectionStatus = document.getElementById('connectionStatus');
+                this.outputVolumeSlider = document.getElementById('outputVolume');
+                this.volumeValue = document.getElementById('volumeValue');
+                
+                this.recordBtn.addEventListener('click', () => this.startRecording());
+                this.stopBtn.addEventListener('click', () => this.stopRecording());
+                this.swapBtn.addEventListener('click', () => this.swapLanguages());
+                
+                this.outputVolumeSlider.addEventListener('input', (e) => {
+                    this.outputVolume = parseFloat(e.target.value);
+                    this.volumeValue.textContent = `${Math.round(this.outputVolume * 100)}%`;
+                });
+            }
+            
+            connectWebSocket() {
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}/ws/${this.clientId}`;
+                
+                this.updateStatus('Connecting to server...', 'info');
+                this.updateConnectionStatus('connecting');
+                
+                this.websocket = new WebSocket(wsUrl);
+                
+                this.websocket.onopen = () => {
+                    console.log('WebSocket connected');
+                    this.updateStatus('Connected! Ready to translate.', 'success');
+                    this.updateConnectionStatus('connected');
+                    this.recordBtn.disabled = false;
+                };
+                
+                this.websocket.onmessage = (event) => {
+                    this.handleWebSocketMessage(event);
+                };
+                
+                this.websocket.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    this.updateStatus('Disconnected from server. Trying to reconnect...', 'error');
+                    this.updateConnectionStatus('disconnected');
+                    this.recordBtn.disabled = true;
+                    
+                    // Try to reconnect after 3 seconds
+                    setTimeout(() => this.connectWebSocket(), 3000);
+                };
+                
+                this.websocket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    this.updateStatus('Connection error. Please check your network.', 'error');
+                    this.updateConnectionStatus('disconnected');
+                };
+            }
+            
+            async handleWebSocketMessage(event) {
+                if (event.data instanceof Blob) {
+                    // Handle binary audio data
+                    const arrayBuffer = await event.data.arrayBuffer();
+                    const dataView = new DataView(arrayBuffer);
+                    
+                    // Read header length (first 4 bytes)
+                    const headerLength = dataView.getUint32(0, true);
+                    
+                    // Parse header
+                    const headerBytes = new Uint8Array(arrayBuffer, 4, headerLength);
+                    const headerText = new TextDecoder().decode(headerBytes);
+                    const header = JSON.parse(headerText);
+                    
+                    if (header.type === 'audio') {
+                        // Extract audio data
+                        const audioData = arrayBuffer.slice(4 + headerLength);
+                        await this.playAudio(audioData);
+                        this.updateStatus(`Playing translated audio (${header.src_lang} → ${header.tgt_lang})`, 'success');
+                    }
+                } else {
+                    // Handle text messages
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'error') {
+                        this.updateStatus(`Error: ${message.message}`, 'error');
+                    }
+                }
+            }
+            
+            async playAudio(audioArrayBuffer) {
+                try {
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    
+                    const audioBuffer = await this.audioContext.decodeAudioData(audioArrayBuffer);
+                    const source = this.audioContext.createBufferSource();
+                    const gainNode = this.audioContext.createGain();
+                    
+                    source.buffer = audioBuffer;
+                    gainNode.gain.value = this.outputVolume;
+                    
+                    source.connect(gainNode);
+                    gainNode.connect(this.audioContext.destination);
+                    
+                    source.start();
+                    
+                } catch (error) {
+                    console.error('Audio playback error:', error);
+                    this.updateStatus('Audio playback failed', 'error');
+                }
+            }
+            
+            async startRecording() {
+                try {
+                    this.audioStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        }
+                    });
+                    
+                    const options = {
+                        mimeType: 'audio/webm;codecs=opus',
+                        audioBitsPerSecond: 16000
+                    };
+                    
+                    this.mediaRecorder = new MediaRecorder(this.audioStream, options);
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0 && this.websocket.readyState === WebSocket.OPEN) {
+                            this.sendAudioData(event.data);
+                        }
+                    };
+                    
+                    this.mediaRecorder.start(1000); // Collect data every 1 second
+                    this.isRecording = true;
+                    
+                    this.recordBtn.style.display = 'none';
+                    this.stopBtn.style.display = 'inline-block';
+                    this.recordBtn.classList.add('recording');
+                    
+                    this.updateStatus('🎤 Recording... Speak now!', 'info');
+                    
+                } catch (error) {
+                    console.error('Recording error:', error);
+                    this.updateStatus('Microphone access denied or not available', 'error');
+                }
+            }
+            
+            stopRecording() {
+                if (this.mediaRecorder && this.isRecording) {
+                    this.mediaRecorder.stop();
+                    this.isRecording = false;
+                }
+                
+                if (this.audioStream) {
+                    this.audioStream.getTracks().forEach(track => track.stop());
+                    this.audioStream = null;
+                }
+                
+                this.recordBtn.style.display = 'inline-block';
+                this.stopBtn.style.display = 'none';
+                this.recordBtn.classList.remove('recording');
+                
+                this.updateStatus('Recording stopped. Click "Start Recording" to continue.', 'info');
+            }
+            
+            async sendAudioData(audioBlob) {
+                try {
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    
+                    // Create header
+                    const header = {
+                        src_lang: this.sourceLanguage.value,
+                        tgt_lang: this.targetLanguage.value
+                    };
+                    
+                    const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+                    const headerLengthBytes = new Uint8Array(4);
+                    const dataView = new DataView(headerLengthBytes.buffer);
+                    dataView.setUint32(0, headerBytes.length, true);
+                    
+                    // Combine header length + header + audio data
+                    const message = new Uint8Array(4 + headerBytes.length + arrayBuffer.byteLength);
+                    message.set(headerLengthBytes, 0);
+                    message.set(headerBytes, 4);
+                    message.set(new Uint8Array(arrayBuffer), 4 + headerBytes.length);
+                    
+                    this.websocket.send(message);
+                    this.updateStatus('Processing translation...', 'info');
+                    
+                } catch (error) {
+                    console.error('Send audio error:', error);
+                    this.updateStatus('Failed to send audio data', 'error');
+                }
+            }
+            
+            swapLanguages() {
+                const sourceValue = this.sourceLanguage.value;
+                const targetValue = this.targetLanguage.value;
+                
+                this.sourceLanguage.value = targetValue;
+                this.targetLanguage.value = sourceValue;
+                
+                this.updateStatus('Languages swapped!', 'info');
+            }
+            
+            updateStatus(message, type) {
+                this.statusMessage.textContent = message;
+                this.statusMessage.className = `status ${type}`;
+            }
+            
+            updateConnectionStatus(status) {
+                this.connectionStatus.textContent = status === 'connected' ? 'Connected' : 
+                                                  status === 'connecting' ? 'Connecting...' : 'Disconnected';
+                this.connectionStatus.className = `connection-status ${status}`;
+            }
+        }
+        
+        // Initialize the translator when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new SpeechTranslator();
+        });
+    </script>
+</body>
+</html>

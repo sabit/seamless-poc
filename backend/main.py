@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
-from transformers import SeamlessM4TForSpeechToSpeech, SeamlessM4TProcessor
+from transformers import SeamlessM4Tv2Model, SeamlessM4TProcessor
 import io
 import wave
 import tempfile
@@ -35,12 +35,12 @@ class SeamlessTranslator:
         """Initialize the model asynchronously"""
         try:
             logger.info("Loading SeamlessM4T model...")
-            self.model = SeamlessM4TForSpeechToSpeech.from_pretrained(
-                "facebook/seamless-m4t-large",
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            self.model = SeamlessM4Tv2Model.from_pretrained(
+                "facebook/seamless-m4t-v2-large",
+                dtype=torch.float16 if self.device == "cuda" else torch.float32
             ).to(self.device)
             
-            self.processor = SeamlessM4TProcessor.from_pretrained("facebook/seamless-m4t-large")
+            self.processor = SeamlessM4TProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
             logger.info("Model loaded successfully!")
             
         except Exception as e:

@@ -12,6 +12,7 @@ NC='\033[0m' # No Color
 
 CONTAINER_NAME="seamless-translator-app"
 IMAGE_NAME="seamless-translator"
+VOLUME_NAME="seamless-model-cache"
 
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -47,7 +48,12 @@ fi
 # print_status "Removing Docker image..."
 # docker rmi $IMAGE_NAME 2>/dev/null || print_status "Image already removed or in use"
 
+# Optionally remove volume (uncomment to delete cached models)
+# print_status "Removing model cache volume..."
+# docker volume rm $VOLUME_NAME 2>/dev/null || print_status "Volume already removed or in use"
+
 print_success "🛑 SeamlessStreaming Translation Service stopped and cleaned up!"
+print_status "Model cache volume '$VOLUME_NAME' preserved for faster next startup"
 
 # Show remaining Docker resources
 echo ""

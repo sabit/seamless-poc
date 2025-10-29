@@ -24,14 +24,22 @@ COPY frontend/ ./frontend/
 
 # Set environment variables
 ENV PYTHONPATH=/app
-ENV TRANSFORMERS_CACHE=/app/cache
-ENV HF_HOME=/app/cache
+ENV TRANSFORMERS_CACHE=/app/model_cache
+ENV HF_HOME=/app/model_cache
 
-# Create cache directory
-RUN mkdir -p /app/cache
+# Create cache directory and set permissions
+RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache
 
-# Pre-download and cache the SeamlessM4T model
-RUN python -c "from transformers import SeamlessM4Tv2ForSpeechToSpeech; SeamlessM4Tv2ForSpeechToSpeech.from_pretrained('facebook/seamless-m4t-v2-large')"
+# Create a volume for persistent model cache
+VOLUME ["/app/model_cache"]
+
+# Pre-download and cache the SeamlessM4T model (only if cache is empty)
+RUN python -c "import os; from transformers import SeamlessM4Tv2ForSpeechToSpeech; \
+    if not os.path.exists('/app/model_cache/models--facebook--seamless-m4t-v2-large'): \
+        print('Downloading SeamlessM4T model...'); \
+        SeamlessM4Tv2ForSpeechToSpeech.from_pretrained('facebook/seamless-m4t-v2-large'); \
+    else: \
+        print('Model cache found, skipping download')"
 
 # Expose port
 EXPOSE 7860

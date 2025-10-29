@@ -78,6 +78,7 @@ seamless-poc/
 
 ## 🛠️ Management Commands
 
+### Container Management
 ```bash
 # View logs
 docker logs -f seamless-translator-app
@@ -93,6 +94,30 @@ docker rm seamless-translator-app
 
 # Full cleanup
 ./scripts/stop.sh
+```
+
+### Volume Management
+```bash
+# Make volume script executable
+chmod +x scripts/manage-volume.sh
+
+# Create model cache volume
+./scripts/manage-volume.sh create
+
+# Inspect volume contents
+./scripts/manage-volume.sh inspect
+
+# Backup model cache
+./scripts/manage-volume.sh backup
+
+# Restore from backup
+./scripts/manage-volume.sh restore backup-file.tar
+
+# Check volume size
+./scripts/manage-volume.sh size
+
+# Clean volume (removes cached models)
+./scripts/manage-volume.sh clean
 ```
 
 ## 🔍 Troubleshooting
@@ -163,14 +188,17 @@ netstat -tlnp | grep :7860
 ## 🔄 Updates and Maintenance
 
 ```bash
-# Rebuild with latest changes
+# Rebuild with latest changes (preserves model cache)
 docker stop seamless-translator-app
 docker rm seamless-translator-app
 ./scripts/build-and-run.sh
 
-# Update model cache
-docker volume rm seamless-translator_cache
+# Force model re-download (if needed)
+./scripts/manage-volume.sh clean
 ./scripts/build-and-run.sh
+
+# Backup before major changes
+./scripts/manage-volume.sh backup
 ```
 
 ## 📞 Support

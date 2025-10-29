@@ -8,6 +8,7 @@ echo 🚀 Building SeamlessStreaming Translation Service...
 
 set IMAGE_NAME=seamless-translator
 set CONTAINER_NAME=seamless-translator-app
+set VOLUME_NAME=seamless-model-cache
 set PORT=7860
 
 REM Check if Docker is installed and running
@@ -27,6 +28,9 @@ echo [INFO] Stopping existing container if running...
 docker stop %CONTAINER_NAME% >nul 2>&1
 docker rm %CONTAINER_NAME% >nul 2>&1
 
+echo [INFO] Creating Docker volume for model cache...
+docker volume create %VOLUME_NAME% >nul 2>&1
+
 echo [INFO] Building Docker image...
 docker build -t %IMAGE_NAME% . --no-cache
 
@@ -37,8 +41,8 @@ if errorlevel 1 (
 
 echo [SUCCESS] Docker image built successfully!
 
-echo [INFO] Starting container...
-docker run -d --name %CONTAINER_NAME% --gpus all -p %PORT%:%PORT% --restart unless-stopped -v "%cd%\cache:/app/cache" %IMAGE_NAME%
+echo [INFO] Starting container with persistent model cache...
+docker run -d --name %CONTAINER_NAME% --gpus all -p %PORT%:%PORT% --restart unless-stopped -v %VOLUME_NAME%:/app/model_cache %IMAGE_NAME%
 
 if errorlevel 1 (
     echo [ERROR] Failed to start container!
@@ -60,6 +64,11 @@ echo    View logs: docker logs -f %CONTAINER_NAME%
 echo    Stop:      docker stop %CONTAINER_NAME%
 echo    Start:     docker start %CONTAINER_NAME%
 echo    Remove:    docker rm %CONTAINER_NAME%
+echo.
+echo 📦 Volume management:
+echo    Inspect:   docker volume inspect %VOLUME_NAME%
+echo    Remove:    docker volume rm %VOLUME_NAME%
+echo    Size:      docker system df -v
 echo.
 
 docker ps --filter name=%CONTAINER_NAME%

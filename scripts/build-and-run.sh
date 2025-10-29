@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 # Configuration
 IMAGE_NAME="seamless-translator"
 CONTAINER_NAME="seamless-translator-app"
+VOLUME_NAME="seamless-model-cache"
 PORT=7860
 
 # Function to print colored output
@@ -56,6 +57,9 @@ print_status "Stopping existing container if running..."
 docker stop $CONTAINER_NAME 2>/dev/null || true
 docker rm $CONTAINER_NAME 2>/dev/null || true
 
+print_status "Creating Docker volume for model cache..."
+docker volume create $VOLUME_NAME 2>/dev/null || print_status "Volume already exists"
+
 print_status "Building Docker image..."
 docker build -t $IMAGE_NAME . --no-cache
 
@@ -66,13 +70,13 @@ fi
 
 print_success "Docker image built successfully!"
 
-print_status "Starting container..."
+print_status "Starting container with persistent model cache..."
 docker run -d \
     --name $CONTAINER_NAME \
     --gpus all \
     -p $PORT:$PORT \
     --restart unless-stopped \
-    -v "$(pwd)/cache:/app/cache" \
+    -v $VOLUME_NAME:/app/model_cache \
     $IMAGE_NAME
 
 if [ $? -ne 0 ]; then
@@ -111,6 +115,11 @@ echo "   View logs: docker logs -f $CONTAINER_NAME"
 echo "   Stop:      docker stop $CONTAINER_NAME"
 echo "   Start:     docker start $CONTAINER_NAME"
 echo "   Remove:    docker rm $CONTAINER_NAME"
+echo ""
+echo "📦 Volume management:"
+echo "   Inspect:   docker volume inspect $VOLUME_NAME"
+echo "   Remove:    docker volume rm $VOLUME_NAME"
+echo "   Size:      docker system df -v"
 echo ""
 echo "📊 System status:"
 docker ps --filter name=$CONTAINER_NAME --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"

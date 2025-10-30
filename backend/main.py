@@ -18,7 +18,6 @@ import tempfile
 import os
 import hashlib
 import time
-import subprocess
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -98,48 +97,30 @@ class SeamlessTranslator:
             return None
     
     def _process_webm_audio(self, audio_bytes: bytes, sample_rate: int):
-        """Process WebM audio format using ffmpeg for reliable conversion"""
+        """Process WebM audio format using librosa with audioread backend"""
         try:
-            import subprocess
-            
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as input_file:
-                input_file.write(audio_bytes)
-                input_file.flush()
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file.flush()
                 
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
-                    try:
-                        # Use ffmpeg to convert WebM to WAV
-                        cmd = [
-                            'ffmpeg', '-i', input_file.name,
-                            '-acodec', 'pcm_s16le',
-                            '-ar', str(sample_rate),
-                            '-ac', '1',  # mono
-                            '-y',  # overwrite output
-                            '-loglevel', 'quiet',  # suppress ffmpeg output
-                            output_file.name
-                        ]
+                try:
+                    # Force librosa to use audioread backend for WebM
+                    # This should work since audioread is already being triggered
+                    waveform, sr = librosa.load(temp_file.name, sr=sample_rate, mono=True)
+                    
+                    if len(waveform) > 0:
+                        logger.info(f"Processed WebM via librosa+audioread: {len(waveform)} samples at {sr}Hz")
+                        os.unlink(temp_file.name)
+                        return torch.from_numpy(waveform).float()
+                    else:
+                        logger.warning("Empty waveform from WebM processing")
+                        os.unlink(temp_file.name)
+                        return None
                         
-                        result = subprocess.run(cmd, capture_output=True, text=True)
-                        
-                        if result.returncode == 0:
-                            # Load the converted WAV file
-                            waveform, sr = librosa.load(output_file.name, sr=sample_rate, mono=True)
-                            logger.info(f"Processed WebM via ffmpeg: {len(waveform)} samples at {sr}Hz")
-                            return torch.from_numpy(waveform).float()
-                        else:
-                            logger.error(f"FFmpeg conversion failed: {result.stderr}")
-                            # Fallback to direct librosa (will likely fail but worth trying)
-                            waveform, sr = librosa.load(input_file.name, sr=sample_rate, mono=True)
-                            logger.info(f"Processed WebM via librosa fallback: {len(waveform)} samples at {sr}Hz")
-                            return torch.from_numpy(waveform).float()
-                            
-                    finally:
-                        # Clean up temp files
-                        try:
-                            os.unlink(input_file.name)
-                            os.unlink(output_file.name)
-                        except:
-                            pass
+                except Exception as e:
+                    logger.error(f"WebM processing with librosa failed: {e}")
+                    os.unlink(temp_file.name)
+                    return None
                             
         except Exception as e:
             logger.error(f"WebM processing failed: {e}")

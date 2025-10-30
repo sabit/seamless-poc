@@ -493,15 +493,18 @@
                     
                     console.log('✅ Microphone access granted, stream tracks:', this.audioStream.getTracks().length);
                     
-                    // Try MediaRecorder with WAV format first (more compatible)
-                    let options = { mimeType: 'audio/wav' };
+                    // Chrome only supports WebM, but we'll use the most compatible version
+                    let options = { mimeType: 'audio/webm' };  // Most basic WebM format
                     
-                    // Fall back to webm if WAV not supported
-                    if (!MediaRecorder.isTypeSupported('audio/wav')) {
+                    // Try specific codec for better compatibility
+                    if (MediaRecorder.isTypeSupported('audio/webm;codecs=pcm')) {
+                        options = { mimeType: 'audio/webm;codecs=pcm' };
+                        console.log('✅ Using WebM with PCM codec for easier processing');
+                    } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
                         options = { mimeType: 'audio/webm;codecs=opus' };
-                        console.log('⚠️ WAV not supported, using WebM format as fallback');
+                        console.log('✅ Using WebM with Opus codec');
                     } else {
-                        console.log('✅ Using WAV format for recording');
+                        console.log('✅ Using basic WebM format');
                     }
                     
                     console.log('🎙️ Creating MediaRecorder with options:', options);

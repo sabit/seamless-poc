@@ -29,8 +29,8 @@ openssl req -new -key "$KEY_FILE" -out server.csr -subj "/C=US/ST=State/L=City/O
 echo "📜 Generating self-signed certificate..."
 openssl x509 -req -days "$DAYS" -in server.csr -signkey "$KEY_FILE" -out "$CERT_FILE"
 
-# Create certificate with Subject Alternative Names for better browser support
-echo "🌐 Creating certificate with SAN..."
+# Create certificate with proper extensions for web servers
+echo "🌐 Creating certificate with proper server extensions..."
 cat > server.conf <<EOF
 [req]
 distinguished_name = req_distinguished_name
@@ -46,14 +46,14 @@ OU = OrgUnit
 CN = $DOMAIN
 
 [v3_req]
-keyUsage = keyEncipherment, dataEncipherment
-extendedKeyUsage = serverAuth
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment, keyAgreement
+extendedKeyUsage = critical, serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = localhost
-DNS.2 = 127.0.0.1
-DNS.3 = ::1
+DNS.2 = *.localhost
 IP.1 = 127.0.0.1
 IP.2 = ::1
 EOF

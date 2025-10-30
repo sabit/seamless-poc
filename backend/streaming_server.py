@@ -551,19 +551,32 @@ if __name__ == "__main__":
     if args.ssl_keyfile and args.ssl_certfile:
         import ssl
         
-        # Use modern SSL context creation (avoiding deprecated PROTOCOL constants)
+        # Use modern SSL context creation with better compatibility
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         
         # Set minimum TLS version based on user preference
         if args.ssl_version == 'TLSv1_2':
             ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3  # Allow TLS 1.3
         elif args.ssl_version == 'TLSv1_1':
             ssl_context.minimum_version = ssl.TLSVersion.TLSv1_1
         else:  # TLSv1
             ssl_context.minimum_version = ssl.TLSVersion.TLSv1
         
-        # Load certificate and key
-        ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
+        # Configure cipher suites for better compatibility
+        ssl_context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS')
+        
+        # Load certificate and key with error handling
+        try:
+            ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
+            print(f"✅ SSL certificate and key loaded successfully")
+        except ssl.SSLError as ssl_err:
+            print(f"❌ SSL certificate/key error: {ssl_err}")
+            print(f"💡 Try regenerating certificates with: chmod +x scripts/fix_ssl_cert.sh && ./scripts/fix_ssl_cert.sh")
+            exit(1)
+        except Exception as cert_err:
+            print(f"❌ Certificate loading error: {cert_err}")
+            exit(1)
         
         if args.ssl_ca_certs:
             ssl_context.load_verify_locations(args.ssl_ca_certs)

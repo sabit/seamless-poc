@@ -247,6 +247,9 @@
                 this.audioStream = null;
                 this.isRecording = false;
                 this.audioContext = null;
+                this.currentAudioSource = null;
+                this.currentSessionId = null;
+                this.playedSessionIds = new Set();
                 this.clientId = Math.random().toString(36).substr(2, 9);
                 this.outputVolume = 0.8;
                 
@@ -461,6 +464,10 @@
             
             async startRecording() {
                 try {
+                    // Generate new session ID for this recording
+                    this.currentSessionId = Math.random().toString(36).substr(2, 9);
+                    console.log('🆔 Starting new recording session:', this.currentSessionId);
+                    
                     console.log('🎤 Requesting microphone access...');
                     this.audioStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -487,14 +494,24 @@
                     console.log('🎙️ Creating MediaRecorder with options:', options);
                     this.mediaRecorder = new MediaRecorder(this.audioStream, options);
                     
+                    // Store audio chunks for complete recording
+                    this.audioChunks = [];
+                    
                     this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0 && this.websocket.readyState === WebSocket.OPEN) {
-                            console.log('📊 Audio chunk available:', event.data.size, 'bytes, MIME type:', event.data.type);
-                            console.log('🌐 WebSocket ready state:', this.websocket.readyState, '(1=OPEN)');
-                            this.convertAndSendAudio(event.data);
-                        } else {
-                            console.warn('⚠️ Skipping audio chunk - Size:', event.data.size, 'WebSocket state:', this.websocket.readyState);
+                        if (event.data.size > 0) {
+                            console.log('📊 Audio chunk collected:', event.data.size, 'bytes, MIME type:', event.data.type);
+                            this.audioChunks.push(event.data);
                         }
+                    };
+                    
+                    this.mediaRecorder.onstop = () => {
+                        console.log('� Recording stopped, sending complete audio...');
+                        if (this.audioChunks.length > 0) {
+                            const completeAudio = new Blob(this.audioChunks, { type: this.audioChunks[0].type });
+                            console.log('📦 Complete audio blob created:', completeAudio.size, 'bytes');
+                            this.convertAndSendAudio(completeAudio);
+                        }
+                        this.audioChunks = [];
                     };
                     
                     this.mediaRecorder.onerror = (event) => {
@@ -507,8 +524,8 @@
                         this.updateStatus('Recording error: ' + event.error, 'error');
                     };
                     
-                    console.log('🎬 Starting MediaRecorder with 1-second intervals');
-                    this.mediaRecorder.start(1000); // Collect data every 1 second
+                    console.log('🎬 Starting MediaRecorder for complete recording');
+                    this.mediaRecorder.start(); // Record continuously until stopped
                     this.isRecording = true;
                     
                     this.recordBtn.style.display = 'none';
@@ -525,7 +542,7 @@
             }
             
             stopRecording() {
-                console.log('⏹️ Stopping recording...');
+                console.log('⏹️ Stopping recording session:', this.currentSessionId);
                 
                 if (this.mediaRecorder && this.isRecording) {
                     console.log('📊 MediaRecorder state before stop:', this.mediaRecorder.state);
@@ -587,6 +604,20 @@
             
             async playTranslatedAudio(audioData) {
                 try {
+                    // Skip if we've already played audio for this session
+                    if (this.currentSessionId && this.playedSessionIds.has(this.currentSessionId)) {
+                        console.log('🔇 Skipping duplicate audio for session:', this.currentSessionId);
+                        return;
+                    }
+                    
+                    // Stop any currently playing audio to prevent overlapping
+                    if (this.currentAudioSource) {
+                        console.log('🛑 Stopping previous audio to prevent overlap');
+                        this.currentAudioSource.stop();
+                        this.currentAudioSource = null;
+                    }
+                    
+                    console.log('🎵 Processing audio for session:', this.currentSessionId);
                     console.log('Audio data type:', audioData.constructor.name);
                     
                     // Handle Blob vs ArrayBuffer
@@ -673,15 +704,32 @@
                     gainNode.connect(this.audioContext.destination);
                     console.log('🔗 Audio graph connected: Source → Gain → Destination');
                     
+                    // Store reference to current audio source for stopping if needed
+                    this.currentAudioSource = source;
+                    
                     // Add event listeners
                     source.onended = () => {
                         console.log('🏁 Audio playback finished successfully');
+                        this.currentAudioSource = null;
                         this.updateStatus('Ready for next translation', 'success');
                     };
                     
                     source.onerror = (error) => {
                         console.error('❌ Audio source error:', error);
+                        this.currentAudioSource = null;
                     };
+                    
+                    // Mark this session as played to prevent duplicates
+                    if (this.currentSessionId) {
+                        this.playedSessionIds.add(this.currentSessionId);
+                        console.log('✅ Marked session as played:', this.currentSessionId);
+                        
+                        // Clean up old session IDs to prevent memory growth
+                        if (this.playedSessionIds.size > 10) {
+                            const oldestId = this.playedSessionIds.values().next().value;
+                            this.playedSessionIds.delete(oldestId);
+                        }
+                    }
                     
                     // Start playback
                     console.log('▶️ Starting audio playback...');

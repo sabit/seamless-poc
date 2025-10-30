@@ -322,61 +322,74 @@ class OfficialStreamingTranslator:
                 
                 logger.info(f"📥 INPUT: {len(audio_array)} samples, finished={segment_finished}")
                 
-                # OFFICIAL SIMULEVAL APPROACH: Use proper evaluation pattern
-                # Based on research: Use SimulEval's evaluate() method instead of direct policy calls
+                # DEBUG: Log agent methods and attributes for analysis
+                if segment_finished and len(audio_array) >= 4000:  # Only log on large finished segments
+                    logger.info(f"🔍 AGENT DEBUG: type={type(self.agent)}, methods={[m for m in dir(self.agent) if not m.startswith('_') and callable(getattr(self.agent, m, None))][:10]}")
+                
+                # SIMULEVAL EVALUATOR APPROACH: Use official evaluation framework
+                # Based on research: SeamlessStreaming requires SimulEval Evaluator for proper coordination
                 action = None
                 
-                # Method 1: Try official SimulEval evaluation approach
                 try:
-                    from simuleval.evaluator.instance import LogInstance
+                    # Method 1: Use official SimulEval Evaluator pattern
+                    from simuleval.evaluator.evaluator import build_evaluator
+                    from simuleval.data.segments import Segment
                     
-                    # Try the pushback/policy pattern from official evaluation
-                    if hasattr(self.agent, 'pushback') and hasattr(self.agent, 'pop'):
-                        # This is the pattern used in streaming_evaluate.py
-                        self.agent.pushback([speech_segment])
-                        action = self.agent.pop()
-                        logger.info(f"🔧 Used official pushback/pop pattern")
+                    # Create a minimal evaluation instance for this segment
+                    source_segments = [speech_segment]
+                    
+                    # Try to evaluate using the official evaluator approach
+                    if not hasattr(self, '_evaluator'):
+                        # Build evaluator for this agent if not exists
+                        self._evaluator = build_evaluator(None)  # Use default config
                         
-                    elif hasattr(self.agent, 'policy') and callable(getattr(self.agent, 'policy')):
-                        # Fallback: Direct policy but with proper state preparation
-                        action = self.agent.policy()  # No state parameter
-                        logger.info(f"🔧 Used parameterless policy call")
-                        
+                    # Process the segment through proper evaluation
+                    results = self._evaluator.evaluate(
+                        agent=self.agent,
+                        source_segments=source_segments,
+                        target_segments=[],  # No reference for streaming
+                        output_dir=None
+                    )
+                    
+                    if results and len(results) > 0:
+                        # Extract action from evaluation results
+                        action = results[-1] if results else None
+                        logger.info(f"🔧 SimulEval Evaluator produced result")
                     else:
-                        logger.warning(f"⚠️ Agent has no suitable evaluation methods")
                         action = None
+                        logger.info(f"🔧 SimulEval Evaluator returned empty")
                         
-                except Exception as evaluation_error:
-                    logger.warning(f"⚠️ Official evaluation failed: {evaluation_error}")
+                except ImportError as import_error:
+                    logger.warning(f"⚠️ SimulEval Evaluator not available: {import_error}")
+                    action = None
+                    
+                except Exception as eval_error:
+                    logger.warning(f"⚠️ SimulEval Evaluator failed: {eval_error}")
                     action = None
                 
-                # Method 2: Fallback to state-based approach if evaluation fails
+                # Method 2: Try simple agent processing
                 if action is None:
                     try:
+                        # Update agent state with audio segment
                         if isinstance(self.agent_states, list):
-                            # Pipeline agent: Update first state
                             first_state = self.agent_states[0]
                             if not hasattr(first_state, 'source'):
                                 first_state.source = []
                             first_state.source.append(speech_segment)
                             first_state.source_finished = segment_finished
-                            
-                            # Try policy with state parameter
-                            action = self.agent.policy(first_state)
-                            logger.info(f"🔧 Fallback: Pipeline with state")
-                            
+                        
+                        # Try both parameterless and parameter policy calls
+                        if hasattr(self.agent, 'policy'):
+                            action = self.agent.policy()  # Parameterless first
+                            if action is None and isinstance(self.agent_states, list):
+                                action = self.agent.policy(self.agent_states[0])  # With state
+                            logger.info(f"🔧 Agent policy call (action={'found' if action else 'None'})")
                         else:
-                            # Single agent state
-                            if not hasattr(self.agent_states, 'source'):
-                                self.agent_states.source = []
-                            self.agent_states.source.append(speech_segment)
-                            self.agent_states.source_finished = segment_finished
+                            logger.warning(f"⚠️ Agent has no policy method")
+                            action = None
                             
-                            action = self.agent.policy(self.agent_states)
-                            logger.info(f"🔧 Fallback: Single agent with state")
-                            
-                    except Exception as fallback_error:
-                        logger.warning(f"⚠️ Fallback approach failed: {fallback_error}")
+                    except Exception as direct_error:
+                        logger.warning(f"⚠️ Direct agent processing failed: {direct_error}")
                         action = None
                 
                 # FOCUS: Only log critical translation results

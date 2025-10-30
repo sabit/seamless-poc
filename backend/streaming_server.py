@@ -151,6 +151,7 @@ class OfficialStreamingTranslator:
         args.max_consecutive_write = 10  # Maximum consecutive writes for text decoder
         args.min_starting_wait = 1000  # Minimum starting wait for text decoder
         args.no_early_stop = False  # Disable early stopping for streaming
+        args.decision_threshold = 0.7  # Decision threshold for text decoder output
         args.denormalize = False  # Whether to denormalize the output
         
         # Text generation parameters
@@ -179,8 +180,9 @@ class OfficialStreamingTranslator:
         logger.info(f"   ⏳ Min starting wait w2vbert: {args.min_starting_wait_w2vbert}")
         logger.info(f"   ✏️  Max consecutive write: {args.max_consecutive_write}")
         logger.info(f"   ⏰ Min starting wait: {args.min_starting_wait}")
-        logger.info(f"   � No early stop: {args.no_early_stop}")
-        logger.info(f"   �📏 Max len a: {args.max_len_a}")
+        logger.info(f"   🚫 No early stop: {args.no_early_stop}")
+        logger.info(f"   🎯 Decision threshold: {args.decision_threshold}")
+        logger.info(f"   📏 Max len a: {args.max_len_a}")
         logger.info(f"   📏 Max len b: {args.max_len_b}")
         logger.info(f"   🔍 Beam size: {args.beam_size}")
         logger.info(f"   ⚖️  Len penalty: {args.len_penalty}")

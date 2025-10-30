@@ -322,62 +322,62 @@ class OfficialStreamingTranslator:
                 
                 logger.info(f"📥 INPUT: {len(audio_array)} samples, finished={segment_finished}")
                 
-                # RESEARCH-BASED APPROACH: Use proper SimulEval action processing
-                # Based on SeamlessStreaming research: agents expect ReadAction input
+                # OFFICIAL SIMULEVAL APPROACH: Use proper evaluation pattern
+                # Based on research: Use SimulEval's evaluate() method instead of direct policy calls
                 action = None
                 
-                if isinstance(self.agent_states, list):
-                    # Pipeline agent: Create ReadAction for proper SimulEval processing
-                    try:
-                        # Method 1: Standard SimulEval approach - update state then get policy action
-                        first_state = self.agent_states[0]
-                        
-                        # Update first state with speech segment
-                        if not hasattr(first_state, 'source'):
-                            first_state.source = []
-                        first_state.source.append(speech_segment)
-                        first_state.source_finished = segment_finished
-                        
-                        # Process through pipeline
-                        action = self.agent.policy(first_state)
-                        logger.info(f"🔧 Pipeline processed with direct speech segment")
-                        
-                    except Exception as direct_error:
-                        logger.warning(f"⚠️ Direct speech segment failed: {direct_error}")
-                        
-                        # Method 2: Fallback to ReadAction (signals need for more input)
-                        try:
-                            action = ReadAction()  # No parameters - just signals "need more input"
-                            logger.info(f"🔧 Using ReadAction to signal need for more input")
-                        except Exception as read_error:
-                            logger.warning(f"⚠️ ReadAction failed: {read_error}")
-                            action = None
-                        if not hasattr(first_state, 'source'):
-                            first_state.source = []
-                        first_state.source.append(speech_segment)
-                        first_state.source_finished = segment_finished
-                        
-                        action = self.agent.policy(first_state)
-                        logger.info(f"🔧 Pipeline processed with SpeechSegment fallback")
+                # Method 1: Try official SimulEval evaluation approach
+                try:
+                    from simuleval.evaluator.instance import LogInstance
                     
-                else:
-                    # Single agent: Update state directly
+                    # Try the pushback/policy pattern from official evaluation
+                    if hasattr(self.agent, 'pushback') and hasattr(self.agent, 'pop'):
+                        # This is the pattern used in streaming_evaluate.py
+                        self.agent.pushback([speech_segment])
+                        action = self.agent.pop()
+                        logger.info(f"🔧 Used official pushback/pop pattern")
+                        
+                    elif hasattr(self.agent, 'policy') and callable(getattr(self.agent, 'policy')):
+                        # Fallback: Direct policy but with proper state preparation
+                        action = self.agent.policy()  # No state parameter
+                        logger.info(f"🔧 Used parameterless policy call")
+                        
+                    else:
+                        logger.warning(f"⚠️ Agent has no suitable evaluation methods")
+                        action = None
+                        
+                except Exception as evaluation_error:
+                    logger.warning(f"⚠️ Official evaluation failed: {evaluation_error}")
+                    action = None
+                
+                # Method 2: Fallback to state-based approach if evaluation fails
+                if action is None:
                     try:
-                        if not hasattr(self.agent_states, 'source'):
-                            self.agent_states.source = []
-                        self.agent_states.source.append(speech_segment)
-                        self.agent_states.source_finished = segment_finished
-                        
-                        action = self.agent.policy(self.agent_states)
-                        logger.info(f"🔧 Single agent processed via policy")
-                        
-                    except Exception as single_error:
-                        logger.warning(f"⚠️ Single agent failed: {single_error}")
-                        try:
-                            action = ReadAction()  # Fallback to ReadAction
-                            logger.info(f"🔧 Single agent using ReadAction fallback")
-                        except:
-                            action = None
+                        if isinstance(self.agent_states, list):
+                            # Pipeline agent: Update first state
+                            first_state = self.agent_states[0]
+                            if not hasattr(first_state, 'source'):
+                                first_state.source = []
+                            first_state.source.append(speech_segment)
+                            first_state.source_finished = segment_finished
+                            
+                            # Try policy with state parameter
+                            action = self.agent.policy(first_state)
+                            logger.info(f"🔧 Fallback: Pipeline with state")
+                            
+                        else:
+                            # Single agent state
+                            if not hasattr(self.agent_states, 'source'):
+                                self.agent_states.source = []
+                            self.agent_states.source.append(speech_segment)
+                            self.agent_states.source_finished = segment_finished
+                            
+                            action = self.agent.policy(self.agent_states)
+                            logger.info(f"🔧 Fallback: Single agent with state")
+                            
+                    except Exception as fallback_error:
+                        logger.warning(f"⚠️ Fallback approach failed: {fallback_error}")
+                        action = None
                 
                 # FOCUS: Only log critical translation results
                 if action is None:

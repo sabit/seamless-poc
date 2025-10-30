@@ -419,10 +419,24 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    # Check fallback availability at runtime
+    try:
+        fallback_available = FALLBACK_AVAILABLE
+    except NameError:
+        try:
+            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
+            fallback_available = True
+        except ImportError:
+            try:
+                from transformers import SeamlessM4TForSpeechToSpeech
+                fallback_available = True
+            except ImportError:
+                fallback_available = False
+    
     return {
         "status": "healthy",
         "official_streaming": OFFICIAL_STREAMING,
-        "fallback_available": FALLBACK_AVAILABLE
+        "fallback_available": fallback_available
     }
 
 @app.websocket("/ws/stream")
@@ -513,7 +527,23 @@ if __name__ == "__main__":
     
     print("🌊 SeamlessStreaming Translation Service")
     print(f"🔧 Official streaming: {OFFICIAL_STREAMING}")
-    print(f"🔄 Fallback available: {FALLBACK_AVAILABLE}")
+    
+    # Check if fallback is available (it should be since we imported it earlier)
+    try:
+        fallback_status = FALLBACK_AVAILABLE
+    except NameError:
+        # FALLBACK_AVAILABLE not defined, check if we can import fallback components
+        try:
+            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
+            fallback_status = True
+        except ImportError:
+            try:
+                from transformers import SeamlessM4TForSpeechToSpeech
+                fallback_status = True
+            except ImportError:
+                fallback_status = False
+    
+    print(f"🔄 Fallback available: {fallback_status}")
     print(f"⚡ CUDA: {torch.cuda.is_available()}")
     
     # SSL configuration
@@ -557,7 +587,7 @@ if __name__ == "__main__":
     print(f"🌐 Server URL: {protocol}://{args.host}:{args.port}")
     print("=" * 50)
     
-    if not OFFICIAL_STREAMING and not FALLBACK_AVAILABLE:
+    if not OFFICIAL_STREAMING and not fallback_status:
         print("❌ No translation backend available!")
         exit(1)
     

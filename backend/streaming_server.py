@@ -126,6 +126,7 @@ class OfficialStreamingTranslator:
         # Device and precision configuration
         args.device = torch.device("cuda")
         args.dtype = torch.float16
+        args.fp16 = True  # Enable fp16 precision
         
         # Language configuration
         args.source_lang = src_lang
@@ -154,7 +155,8 @@ class OfficialStreamingTranslator:
         logger.info(f"   🔧 Unity model: {args.unity_model_name}")
         logger.info(f"   💾 Device: {args.device} (type: {args.device.type})")
         logger.info(f"   📊 Dtype: {args.dtype}")
-        logger.info(f"   🔢 Min unit chunk size: {args.min_unit_chunk_size}")
+        logger.info(f"   � FP16: {args.fp16}")
+        logger.info(f"   �🔢 Min unit chunk size: {args.min_unit_chunk_size}")
         logger.info(f"   ⏱️  Duration factor: {args.d_factor}")
         logger.info(f"   🔄 Shift size: {args.shift_size}")
         logger.info(f"   📐 Segment size: {args.segment_size}")

@@ -4,6 +4,8 @@ import logging
 import numpy as np
 import torch
 import torchaudio
+import librosa
+import soundfile as sf
 from typing import Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -48,29 +50,29 @@ class SeamlessTranslator:
             raise e
     
     def audio_bytes_to_tensor(self, audio_bytes: bytes, sample_rate: int = 16000):
-        """Convert audio bytes to tensor for model input"""
+        """Convert audio bytes to tensor for model input using librosa"""
         try:
             # Create a temporary wav file from bytes
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_file.write(audio_bytes)
                 temp_file.flush()
                 
-                # Load audio using torchaudio
-                waveform, sr = torchaudio.load(temp_file.name)
+                # Load audio using librosa (more reliable than torchaudio)
+                waveform, sr = librosa.load(temp_file.name, sr=None, mono=False)
                 
                 # Clean up temp file
                 os.unlink(temp_file.name)
                 
+                # Convert to mono if stereo
+                if len(waveform.shape) > 1:
+                    waveform = librosa.to_mono(waveform)
+                
                 # Resample if necessary
                 if sr != sample_rate:
-                    resampler = torchaudio.transforms.Resample(sr, sample_rate)
-                    waveform = resampler(waveform)
+                    waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate)
                 
-                # Convert to mono if stereo
-                if waveform.shape[0] > 1:
-                    waveform = waveform.mean(dim=0, keepdim=True)
-                
-                return waveform.squeeze()
+                # Convert numpy array to torch tensor
+                return torch.from_numpy(waveform).float()
                 
         except Exception as e:
             logger.error(f"Error processing audio bytes: {e}")

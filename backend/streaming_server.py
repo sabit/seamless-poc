@@ -154,6 +154,7 @@ class OfficialStreamingTranslator:
         args.decision_threshold = 0.7  # Decision threshold for text decoder output
         args.decision_method = "threshold"  # Decision method for text decoder
         args.block_ngrams = False  # Block repeated n-grams in text generation
+        args.p_choose_start_layer = 0  # Layer to start choosing from in decoder
         args.denormalize = False  # Whether to denormalize the output
         
         # Text generation parameters

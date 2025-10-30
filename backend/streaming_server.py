@@ -277,11 +277,14 @@ class OfficialStreamingTranslator:
             logger.info(f"📈 Total accumulated samples: {self.total_samples}")
             
             # Determine if segment should be marked as finished
-            # Mark as finished after 3 seconds or 48000 samples (3 sec * 16kHz)
+            # Mark as finished more aggressively to force translation output
+            # Try shorter thresholds: 1.5 seconds or 24000 samples (1.5 sec * 16kHz)
             time_based_finish = (self.last_chunk_time and 
-                               (current_time - self.last_chunk_time) > 3.0)
-            sample_based_finish = self.total_samples >= 48000
-            segment_finished = time_based_finish or sample_based_finish
+                               (current_time - self.last_chunk_time) > 1.5)
+            sample_based_finish = self.total_samples >= 24000
+            # Also mark as finished every 10th chunk to force periodic output
+            chunk_based_finish = (self.total_samples % 16384) == 0 and self.total_samples > 16384
+            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish
             
             if segment_finished:
                 logger.info(f"🏁 Marking segment as finished (samples: {self.total_samples}, time_gap: {time_based_finish})")
@@ -301,25 +304,45 @@ class OfficialStreamingTranslator:
             try:
                 # Handle list states (pipeline agents)
                 if isinstance(self.agent_states, list):
-                    logger.info("📋 Using pipeline agent approach")
+                    logger.info(f"📋 Using pipeline agent approach with {len(self.agent_states)} states")
+                    # Debug: Log pipeline structure
+                    for i, state in enumerate(self.agent_states):
+                        logger.info(f"  State {i}: {type(state).__name__}")
+                        if hasattr(state, '__dict__'):
+                            state_attrs = [attr for attr in dir(state) if not attr.startswith('_')]
+                            logger.info(f"    Available attributes: {state_attrs[:10]}...")  # Show first 10
+                    
                     # For pipeline agents, update each state in the list
                     for i, state in enumerate(self.agent_states):
                         if hasattr(state, 'source'):
+                            logger.info(f"  Updating state {i} source with segment (finished={segment_finished})")
                             state.source = [segment]
-                            state.source_finished = False
+                            state.source_finished = segment_finished  # Use our calculated finish state
                         if hasattr(state, 'tgt_lang'):
                             state.tgt_lang = self.target_lang
+                        # Additional state updates for different agent types
+                        if hasattr(state, 'target_lang'):
+                            state.target_lang = self.target_lang
+                        if hasattr(state, 'finished'):
+                            state.finished = segment_finished
                     
                     # Get action from the pipeline
+                    logger.info("🔄 Calling agent.policy()...")
                     action = self.agent.policy(self.agent_states)
                 else:
                     logger.info("🔧 Using single agent approach")
                     # Single agent - update states
+                    logger.info(f"  Agent state type: {type(self.agent_states).__name__}")
                     self.agent_states.source = [segment]
-                    self.agent_states.source_finished = False
+                    self.agent_states.source_finished = segment_finished  # Use our calculated finish state
                     if hasattr(self.agent_states, 'tgt_lang'):
                         self.agent_states.tgt_lang = self.target_lang
+                    if hasattr(self.agent_states, 'target_lang'):
+                        self.agent_states.target_lang = self.target_lang
+                    if hasattr(self.agent_states, 'finished'):
+                        self.agent_states.finished = segment_finished
                     
+                    logger.info("🔄 Calling agent.policy()...")
                     action = self.agent.policy(self.agent_states)
                 
                 logger.info(f"🤖 Agent returned action: {type(action)}")
@@ -327,11 +350,24 @@ class OfficialStreamingTranslator:
                 # Handle None actions (normal during accumulation phase)
                 if action is None:
                     logger.info("⏳ Agent still accumulating audio - no translation yet")
+                    # If we're forcing segment finishing but still getting None, there might be a deeper issue
+                    if segment_finished:
+                        logger.warning("⚠️ Segment marked as FINISHED but agent still returned None!")
+                        logger.warning("   This suggests the agent needs more setup or different parameters")
                     return None
                 
                 # Debug action details
+                logger.info(f"✅ Action is not None! Type: {action.__class__.__module__}.{action.__class__.__name__}")
                 if hasattr(action, '__dict__'):
-                    logger.info(f"🔍 Action attributes: {list(action.__dict__.keys())}")
+                    action_attrs = {k: v for k, v in action.__dict__.items()}
+                    logger.info(f"🔍 Action attributes: {list(action_attrs.keys())}")
+                    for key, value in action_attrs.items():
+                        if key == 'content' and value is not None:
+                            logger.info(f"  {key}: {type(value)} (length: {len(value) if hasattr(value, '__len__') else 'N/A'})")
+                        else:
+                            logger.info(f"  {key}: {value}")
+                else:
+                    logger.info("🔍 Action has no __dict__ attribute")
                 
                 # Check if action is a ReadAction (needs more input)
                 if hasattr(action, '__class__') and 'Read' in action.__class__.__name__:

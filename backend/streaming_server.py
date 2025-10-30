@@ -145,22 +145,29 @@ class OfficialStreamingTranslator:
                 "vad_chunk_size": 480,  # 30ms chunks at 16kHz
                 "vad_threshold": 0.5,
                 
-                # Latency and quality control
+                # Latency and quality control - fix the NoneType comparison issue
                 "min_starting_wait": 1000,  # Wait for 1 second of audio
-                "max_len_a": 0.0,
+                "max_len_a": 1.2,  # Set to a valid float instead of 0.0
                 "max_len_b": 100,
                 "beam_size": 3,
                 "no_repeat_ngram_size": 3,
                 
+                # SimulEval specific parameters
+                "quality_metrics": [],  # Empty list instead of None
+                "latency_metrics": [],  # Empty list instead of None
+                "computation_aware": False,
+                "start_index": 0,
+                "end_index": None,
+                
                 # Additional required parameters
-                "output": None,  # Not needed for API usage
+                "output": "/tmp",  # Set to a valid path instead of None
                 "log_level": "INFO",
-                "port": None,  # Not needed for direct usage
-                "host": None,  # Not needed for direct usage
+                "port": 12321,  # Set to a valid port instead of None
+                "host": "localhost",  # Set to a valid host instead of None
                 
                 # Model loading settings
                 "gated_model_dir": None,
-                "model_name": None,
+                "model_name": "seamless_streaming_unity",  # Set explicitly
                 
                 # Generation settings
                 "temperature": 1.0,
@@ -170,6 +177,11 @@ class OfficialStreamingTranslator:
                 # Audio settings
                 "sample_rate": self.sample_rate,
                 "chunk_size": 4096,
+                
+                # Additional streaming parameters
+                "waitk": 3,  # Wait-k policy
+                "test_segment_size": None,
+                "source_segment_size": None,
             }
             
             # Select appropriate agent class
@@ -205,17 +217,29 @@ class OfficialStreamingTranslator:
                                 'vad_chunk_size': 480,
                                 'vad_threshold': 0.5,
                                 'min_starting_wait': 1000,
-                                'max_len_a': 0.0,
+                                'max_len_a': 1.2,  # Valid float instead of 0.0
                                 'max_len_b': 100,
                                 'beam_size': 3,
                                 'no_repeat_ngram_size': 3,
-                                'output': None,
+                                'quality_metrics': [],
+                                'latency_metrics': [],
+                                'computation_aware': False,
+                                'start_index': 0,
+                                'end_index': None,
+                                'output': '/tmp',  # Valid path instead of None
                                 'log_level': 'INFO',
+                                'port': 12321,  # Valid port instead of None
+                                'host': 'localhost',  # Valid host instead of None
+                                'model_name': 'seamless_streaming_unity',
+                                'gated_model_dir': None,
                                 'sample_rate': 16000,
                                 'chunk_size': 4096,
                                 'temperature': 1.0,
                                 'length_penalty': 1.0,
-                                'max_new_tokens': 256
+                                'max_new_tokens': 256,
+                                'waitk': 3,
+                                'test_segment_size': None,
+                                'source_segment_size': None
                             }
                             
                             # Set defaults first
@@ -308,13 +332,26 @@ class FallbackStreamingTranslator:
     async def initialize(self, src_lang="eng", tgt_lang="ben"):
         """Initialize the fallback model"""
         try:
-            logger.info(f"Loading fallback model: {FALLBACK_MODEL}")
+            # Determine which model to use
+            try:
+                fallback_model = FALLBACK_MODEL
+            except NameError:
+                # FALLBACK_MODEL not defined, try to determine the best model
+                try:
+                    from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
+                    fallback_model = "facebook/seamless-m4t-v2-large"
+                    logger.info("📦 Using SeamlessM4T v2 fallback model")
+                except ImportError:
+                    fallback_model = "facebook/seamless-m4t-large"
+                    logger.info("📦 Using SeamlessM4T v1 fallback model")
+            
+            logger.info(f"Loading fallback model: {fallback_model}")
             self.model = SeamlessM4TForSpeechToSpeech.from_pretrained(
-                FALLBACK_MODEL,
+                fallback_model,
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
             ).to(self.device)
             
-            self.processor = SeamlessM4TProcessor.from_pretrained(FALLBACK_MODEL)
+            self.processor = SeamlessM4TProcessor.from_pretrained(fallback_model)
             logger.info("✅ Fallback model loaded successfully")
             
         except Exception as e:

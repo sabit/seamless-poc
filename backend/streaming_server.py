@@ -19,7 +19,37 @@ from collections import deque
 import threading
 from queue import Queue, Empty
 
-# Configure logging - FOCUSED MODE
+# Configure logging - FOCUSED MODE with FULL CAPTURE
+import sys
+import os
+from datetime import datetime
+
+class TeeLogger:
+    """Captures both stdout/stderr and logs to file"""
+    def __init__(self, original_stream, log_file):
+        self.original_stream = original_stream
+        self.log_file = log_file
+        
+    def write(self, message):
+        # Write to original stream (console)
+        self.original_stream.write(message)
+        self.original_stream.flush()
+        
+        # Write to log file with timestamp
+        if message.strip():  # Don't log empty lines
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            self.log_file.write(f"[{timestamp}] {message}")
+            self.log_file.flush()
+    
+    def flush(self):
+        self.original_stream.flush()
+        self.log_file.flush()
+
+# Setup comprehensive logging
+log_file = open('seamless_full_debug.log', 'w', encoding='utf-8')
+sys.stdout = TeeLogger(sys.stdout, log_file)
+sys.stderr = TeeLogger(sys.stderr, log_file)
+
 logging.basicConfig(level=logging.WARNING)  # Reduce general logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # Keep our logger at INFO level
@@ -650,24 +680,36 @@ if __name__ == "__main__":
         logger.info("🌐 HTTPS: https://localhost:7860")
         logger.info("🔌 WSS: wss://localhost:7860/ws/stream")
         
-        uvicorn.run(
-            app, 
-            host="0.0.0.0", 
-            port=7860,
-            ssl_keyfile="../ssl/key.pem",
-            ssl_certfile="../ssl/cert.pem",
-            ssl_version=ssl.PROTOCOL_TLS,
-            ssl_cert_reqs=ssl.CERT_NONE,
-            log_level="info"
-        )
+        try:
+            uvicorn.run(
+                app, 
+                host="0.0.0.0", 
+                port=7860,
+                ssl_keyfile="../ssl/key.pem",
+                ssl_certfile="../ssl/cert.pem",
+                ssl_version=ssl.PROTOCOL_TLS,
+                ssl_cert_reqs=ssl.CERT_NONE,
+                log_level="info"
+            )
+        finally:
+            # Close log file when server shuts down
+            if 'log_file' in locals():
+                log_file.close()
+                print("\n📁 Full debug logs saved to: seamless_full_debug.log")
     else:
         logger.info("🌐 Starting server without SSL")
         logger.info("🌐 HTTP: http://localhost:7860")
         logger.info("🔌 WS: ws://localhost:7860/ws/stream")
         
-        uvicorn.run(
-            app, 
-            host="0.0.0.0", 
-            port=7860,
-            log_level="info"
-        )
+        try:
+            uvicorn.run(
+                app, 
+                host="0.0.0.0", 
+                port=7860,
+                log_level="info"
+            )
+        finally:
+            # Close log file when server shuts down
+            if 'log_file' in locals():
+                log_file.close()
+                print("\n📁 Full debug logs saved to: seamless_full_debug.log")

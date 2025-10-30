@@ -344,7 +344,6 @@ class OfficialStreamingTranslator:
                         logger.info(f"🔧 Converted to tensor shape: {audio_tensor.shape}")
                         
                         # Create new SpeechSegment with tensor content
-                        from simuleval.data.segments import SpeechSegment
                         tensor_segment = SpeechSegment(
                             index=speech_segment.index,
                             content=audio_tensor,

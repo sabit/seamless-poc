@@ -19,6 +19,12 @@ import os
 import hashlib
 import time
 
+# Import pydub for WebM processing (same as Gradio)
+try:
+    from pydub import AudioSegment
+except ImportError:
+    AudioSegment = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -97,33 +103,53 @@ class SeamlessTranslator:
             return None
     
     def _process_webm_audio(self, audio_bytes: bytes, sample_rate: int):
-        """Process WebM audio format using librosa with audioread backend"""
+        """Process WebM audio format using PyDub (same as Gradio)"""
         try:
             with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_file:
                 temp_file.write(audio_bytes)
                 temp_file.flush()
                 
                 try:
-                    # Force librosa to use audioread backend for WebM
-                    # This should work since audioread is already being triggered
-                    waveform, sr = librosa.load(temp_file.name, sr=sample_rate, mono=True)
+                    # Use PyDub's AudioSegment.from_file() - same as Gradio
+                    if AudioSegment is None:
+                        raise ImportError("pydub is not installed")
+                    
+                    audio = AudioSegment.from_file(temp_file.name, format="webm")
+                    
+                    # Convert to numpy array
+                    samples = audio.get_array_of_samples()
+                    waveform = np.array(samples).astype(np.float32)
+                    
+                    # Normalize to [-1, 1] range
+                    if audio.sample_width == 2:  # 16-bit
+                        waveform = waveform / 32768.0
+                    elif audio.sample_width == 4:  # 32-bit
+                        waveform = waveform / 2147483648.0
+                    
+                    # Convert to mono if stereo
+                    if audio.channels == 2:
+                        waveform = waveform.reshape(-1, 2).mean(axis=1)
+                    
+                    # Resample if needed
+                    if audio.frame_rate != sample_rate:
+                        waveform = librosa.resample(waveform, orig_sr=audio.frame_rate, target_sr=sample_rate)
+                    
+                    os.unlink(temp_file.name)
                     
                     if len(waveform) > 0:
-                        logger.info(f"Processed WebM via librosa+audioread: {len(waveform)} samples at {sr}Hz")
-                        os.unlink(temp_file.name)
+                        logger.info(f"Processed WebM via pydub: {len(waveform)} samples at {sample_rate}Hz")
                         return torch.from_numpy(waveform).float()
                     else:
                         logger.warning("Empty waveform from WebM processing")
-                        os.unlink(temp_file.name)
                         return None
                         
                 except Exception as e:
-                    logger.error(f"WebM processing with librosa failed: {e}")
+                    logger.error(f"PyDub WebM processing failed: {e}")
                     os.unlink(temp_file.name)
                     return None
                             
         except Exception as e:
-            logger.error(f"WebM processing failed: {e}")
+            logger.error(f"WebM processing completely failed: {e}")
             return None
     
     def _process_raw_pcm(self, audio_bytes: bytes, sample_rate: int):

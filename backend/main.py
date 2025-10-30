@@ -431,15 +431,39 @@ class StreamingSession:
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
         self.sample_rate = sample_rate
-        self.translator = StreamingTranslator()
         self.running = False
         self.last_output_time = 0
         self.min_output_interval = 0.5  # Minimum 500ms between outputs
+        # Use streaming buffer management without creating new translator
+        self.buffer = deque(maxlen=int(sample_rate * 10))  # 10 second circular buffer
+        self.chunk_duration = 2.0  # Process chunks of 2 seconds
+        self.overlap_duration = 0.5  # 0.5 second overlap between chunks
     
     async def initialize(self):
-        """Initialize the streaming session"""
-        await self.translator.initialize()
+        """Initialize the streaming session - no model loading needed"""
+        # No model loading - reuse global streaming_translator
+        pass
     
+    def add_audio_chunk(self, audio_data: np.ndarray):
+        """Add audio chunk to the streaming buffer"""
+        self.buffer.extend(audio_data)
+    
+    def get_processing_chunk(self) -> Optional[np.ndarray]:
+        """Get the next chunk for processing with overlap"""
+        if len(self.buffer) < int(self.sample_rate * self.chunk_duration):
+            return None
+        
+        chunk_samples = int(self.sample_rate * self.chunk_duration)
+        chunk = np.array(list(self.buffer)[-chunk_samples:])
+        
+        # Remove processed samples (keeping overlap)
+        overlap_samples = int(self.sample_rate * self.overlap_duration)
+        samples_to_remove = chunk_samples - overlap_samples
+        for _ in range(min(samples_to_remove, len(self.buffer))):
+            self.buffer.popleft()
+            
+        return chunk
+
     async def process_audio_chunk(self, audio_data: bytes):
         """Process an incoming audio chunk"""
         try:
@@ -450,15 +474,15 @@ class StreamingSession:
             audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             
             # Add to streaming buffer
-            self.translator.add_audio_chunk(audio_np)
+            self.add_audio_chunk(audio_np)
             
             # Check if we can process a chunk
             current_time = time.time()
             if current_time - self.last_output_time >= self.min_output_interval:
-                chunk = self.translator.get_processing_chunk()
+                chunk = self.get_processing_chunk()
                 if chunk is not None:
-                    # Process the chunk
-                    result = await self.translator.process_streaming_chunk(chunk, self.src_lang, self.tgt_lang)
+                    # Process the chunk using global streaming_translator
+                    result = await streaming_translator.process_streaming_chunk(chunk, self.src_lang, self.tgt_lang)
                     if result:
                         await self.websocket.send_bytes(result)
                         self.last_output_time = current_time

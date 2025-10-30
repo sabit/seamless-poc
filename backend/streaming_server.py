@@ -331,9 +331,30 @@ class OfficialStreamingTranslator:
                 action = None
                 
                 try:
+                    import torch
                     # PUSH: Feed audio segment to agent for processing
                     logger.info(f"🔼 PUSH: {len(audio_array)} samples, finished={segment_finished}")
-                    push_result = self.agent.push(speech_segment)
+                    
+                    # Convert audio to tensor if needed - SeamlessStreaming expects tensors
+                    if hasattr(speech_segment, 'content') and isinstance(speech_segment.content, np.ndarray):
+                        # Convert numpy array to PyTorch tensor
+                        audio_tensor = torch.from_numpy(speech_segment.content).float()
+                        if audio_tensor.dim() == 1:
+                            audio_tensor = audio_tensor.unsqueeze(0)  # Add batch dimension
+                        logger.info(f"🔧 Converted to tensor shape: {audio_tensor.shape}")
+                        
+                        # Create new SpeechSegment with tensor content
+                        from simuleval.data.segments import SpeechSegment
+                        tensor_segment = SpeechSegment(
+                            index=speech_segment.index,
+                            content=audio_tensor,
+                            finished=speech_segment.finished,
+                            sample_rate=speech_segment.sample_rate
+                        )
+                        push_result = self.agent.push(tensor_segment)
+                    else:
+                        push_result = self.agent.push(speech_segment)
+                    
                     logger.info(f"🔼 Push result: {type(push_result)} = {push_result}")
                     
                     # POP: Try to get translation output

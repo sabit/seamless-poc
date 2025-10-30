@@ -733,7 +733,7 @@
                     
                     console.log('Final ArrayBuffer size:', arrayBuffer.byteLength, 'bytes');
                     
-                    // audioData is raw PCM bytes from server
+                    // Backend sends raw PCM int16 data at 16kHz
                     const pcmArray = new Int16Array(arrayBuffer);
                     console.log('Converted to PCM array:', pcmArray.length, 'samples');
                     
@@ -749,17 +749,15 @@
                     
                     if (nonZeroSamples === 0) {
                         console.error('Audio data contains only silence');
-                        this.updateStatus('Received silent audio - translation may have failed', 'error');
+                        this.updateStatus('Received silent audio - translation may have failed', 'warning');
                         return;
                     }
                     
                     // Create or resume AudioContext
                     if (!this.audioContext) {
-                        console.log('🎵 Creating new AudioContext with 16kHz sample rate');
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 16000
-                        });
-                        console.log('✅ AudioContext created, state:', this.audioContext.state);
+                        console.log('🎵 Creating new AudioContext');
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        console.log('✅ AudioContext created, sample rate:', this.audioContext.sampleRate, 'state:', this.audioContext.state);
                     }
                     
                     // Resume AudioContext if suspended (required by browser policy)
@@ -767,25 +765,44 @@
                         console.log('⏸️ AudioContext suspended, attempting to resume...');
                         await this.audioContext.resume();
                         console.log('▶️ AudioContext resumed, new state:', this.audioContext.state);
-                    } else {
-                        console.log('🔊 AudioContext already active, state:', this.audioContext.state);
                     }
                     
-                    // Convert PCM to AudioBuffer for playback
-                    console.log('🎵 Creating AudioBuffer: 1 channel,', pcmArray.length, 'samples, 16kHz');
-                    const audioBuffer = this.audioContext.createBuffer(1, pcmArray.length, 16000);
-                    const channelData = audioBuffer.getChannelData(0);
-                    console.log('📊 AudioBuffer created, duration:', audioBuffer.duration.toFixed(3), 'seconds');
+                    // Create AudioBuffer for raw PCM data
+                    // Backend sends 16kHz audio, resample to AudioContext sample rate if needed
+                    const sourceSampleRate = 16000;
+                    const targetSampleRate = this.audioContext.sampleRate;
+                    const resampleRatio = targetSampleRate / sourceSampleRate;
+                    const outputLength = Math.floor(pcmArray.length * resampleRatio);
                     
-                    // Convert int16 to float32 and normalize
-                    console.log('🔄 Converting PCM int16 to float32...');
+                    console.log('🎵 Creating AudioBuffer: 1 channel,', outputLength, 'samples at', targetSampleRate, 'Hz');
+                    console.log('📊 Resample ratio:', resampleRatio.toFixed(3), '(', sourceSampleRate, '->', targetSampleRate, ')');
+                    
+                    const audioBuffer = this.audioContext.createBuffer(1, outputLength, targetSampleRate);
+                    const channelData = audioBuffer.getChannelData(0);
+                    
+                    // Convert int16 to float32 and resample
+                    console.log('� Converting and resampling PCM data...');
                     let minSample = 0, maxSample = 0;
-                    for (let i = 0; i < pcmArray.length; i++) {
-                        channelData[i] = Math.max(-1.0, Math.min(1.0, pcmArray[i] / 32768.0));
+                    
+                    for (let i = 0; i < outputLength; i++) {
+                        // Simple linear interpolation for resampling
+                        const sourceIndex = i / resampleRatio;
+                        const index1 = Math.floor(sourceIndex);
+                        const index2 = Math.min(index1 + 1, pcmArray.length - 1);
+                        const fraction = sourceIndex - index1;
+                        
+                        // Interpolate between samples
+                        const sample1 = pcmArray[index1] / 32768.0;
+                        const sample2 = pcmArray[index2] / 32768.0;
+                        const interpolatedSample = sample1 + (sample2 - sample1) * fraction;
+                        
+                        // Clamp to valid range
+                        channelData[i] = Math.max(-1.0, Math.min(1.0, interpolatedSample));
                         minSample = Math.min(minSample, channelData[i]);
                         maxSample = Math.max(maxSample, channelData[i]);
                     }
                     console.log('📈 Audio range after conversion: min =', minSample.toFixed(3), 'max =', maxSample.toFixed(3));
+                    console.log('📊 AudioBuffer created, duration:', audioBuffer.duration.toFixed(3), 'seconds');
                     
                     // Create audio source and gain node
                     console.log('🎛️ Setting up audio graph...');

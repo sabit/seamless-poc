@@ -347,7 +347,10 @@
                     this.websocket.close();
                 }
                 
-                const wsUrl = 'wss://34.81.26.139:7860/ws/stream';
+                // Auto-detect WebSocket protocol and host
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const host = window.location.host;
+                const wsUrl = `${protocol}//${host}/ws/stream`;
                 
                 console.log('🔗 Attempting WebSocket connection to:', wsUrl);
                 this.updateStatus('Connecting to server...', 'info');
@@ -358,13 +361,15 @@
                 this.websocket.onopen = () => {
                     console.log('✅ WebSocket connected successfully');
                     
-                    // Send streaming start message
+                    // Send streaming start message with proper language codes
+                    const srcLang = this.sourceLanguage.value === 'eng' ? 'en' : 'bn';
+                    const tgtLang = this.targetLanguage.value === 'eng' ? 'en' : 'bn';
+                    
                     const startMessage = {
                         type: "start_stream",
-                        src_lang: this.sourceLanguage.value,
-                        tgt_lang: this.targetLanguage.value,
-                        sample_rate: 16000,
-                        chunk_size: 4096
+                        src_lang: srcLang,
+                        tgt_lang: tgtLang,
+                        sample_rate: 16000
                     };
                     
                     console.log('📤 Sending start message:', startMessage);
@@ -792,8 +797,15 @@
                 console.log('✅ Languages swapped successfully');
                 this.updateStatus('Languages swapped!', 'info');
                 
-                // Reconnect WebSocket with new language settings if connected
-                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                // If streaming is active, restart with new languages
+                if (this.isStreaming) {
+                    this.stopStreaming();
+                    setTimeout(() => {
+                        this.connectWebSocket();
+                        setTimeout(() => this.startStreaming(), 2000);
+                    }, 1000);
+                } else if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    // Just reconnect WebSocket with new language settings
                     this.websocket.close();
                     setTimeout(() => this.connectWebSocket(), 1000);
                 }

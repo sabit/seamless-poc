@@ -24,7 +24,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SeamlessStreaming Translation API")
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+
+# Determine the correct path for frontend files based on where the script is run from
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+frontend_path = os.path.join(project_root, "frontend")
+
+# If running from project root, frontend is in current directory
+if not os.path.exists(frontend_path):
+    frontend_path = "frontend"
+
+app.mount("/static", StaticFiles(directory=frontend_path), name="static")
 
 # Language code mapping
 LANGUAGE_MAPPING = {
@@ -337,7 +348,11 @@ manager = ConnectionManager()
 
 @app.get("/")
 async def root():
-    return FileResponse("frontend/index.html")
+    # Use the same frontend path logic
+    index_path = os.path.join(frontend_path, "index.html")
+    if not os.path.exists(index_path):
+        index_path = "frontend/index.html"
+    return FileResponse(index_path)
 
 @app.get("/health")
 async def health_check():

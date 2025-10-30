@@ -246,6 +246,47 @@
                 
                 this.initializeUI();
                 this.connectWebSocket();
+                this.enableAudioPlayback();
+            }
+            
+            enableAudioPlayback() {
+                let audioEnabled = false;
+                
+                // Enable audio playback on first user interaction
+                const enableAudio = async () => {
+                    if (audioEnabled) return;
+                    
+                    try {
+                        if (!this.audioContext) {
+                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                                sampleRate: 16000
+                            });
+                        }
+                        
+                        if (this.audioContext.state === 'suspended') {
+                            await this.audioContext.resume();
+                            console.log('Audio context resumed');
+                        }
+                        
+                        audioEnabled = true;
+                        this.updateStatus('Audio enabled! Ready for translation', 'success');
+                        
+                        // Remove the event listeners after first interaction
+                        document.removeEventListener('click', enableAudio);
+                        document.removeEventListener('touchstart', enableAudio);
+                        
+                    } catch (error) {
+                        console.error('Failed to enable audio:', error);
+                        this.updateStatus('Audio setup failed - please refresh and try again', 'error');
+                    }
+                };
+                
+                // Add event listeners for user interaction
+                document.addEventListener('click', enableAudio);
+                document.addEventListener('touchstart', enableAudio);
+                
+                // Show initial message
+                this.updateStatus('Click anywhere to enable audio playback', 'warning');
             }
             
             initializeUI() {
@@ -270,8 +311,8 @@
             }
             
             connectWebSocket() {
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${wsProtocol}//${window.location.host}/ws/translate`;
+                // Connect to the VM server
+                const wsUrl = 'wss://34.81.26.139:7860/ws/translate';
                 
                 this.updateStatus('Connecting to server...', 'info');
                 this.updateConnectionStatus('connecting');
@@ -481,34 +522,68 @@
                     const pcmArray = new Int16Array(audioData);
                     console.log('Received translated PCM:', pcmArray.length, 'samples');
                     
-                    // Convert PCM to AudioBuffer for playback
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    const audioBuffer = audioContext.createBuffer(1, pcmArray.length, 16000);
-                    const channelData = audioBuffer.getChannelData(0);
-                    
-                    // Convert int16 to float32
-                    for (let i = 0; i < pcmArray.length; i++) {
-                        channelData[i] = pcmArray[i] / 32768.0;
+                    if (pcmArray.length === 0) {
+                        console.error('No audio data received');
+                        this.updateStatus('No audio data to play', 'error');
+                        return;
                     }
                     
-                    // Play the audio
-                    const source = audioContext.createBufferSource();
-                    const gainNode = audioContext.createGain();
+                    // Create or resume AudioContext
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 16000
+                        });
+                    }
+                    
+                    // Resume AudioContext if suspended (required by browser policy)
+                    if (this.audioContext.state === 'suspended') {
+                        await this.audioContext.resume();
+                    }
+                    
+                    // Convert PCM to AudioBuffer for playback
+                    const audioBuffer = this.audioContext.createBuffer(1, pcmArray.length, 16000);
+                    const channelData = audioBuffer.getChannelData(0);
+                    
+                    // Convert int16 to float32 and normalize
+                    for (let i = 0; i < pcmArray.length; i++) {
+                        channelData[i] = Math.max(-1.0, Math.min(1.0, pcmArray[i] / 32768.0));
+                    }
+                    
+                    // Create audio source and gain node
+                    const source = this.audioContext.createBufferSource();
+                    const gainNode = this.audioContext.createGain();
                     
                     source.buffer = audioBuffer;
                     gainNode.gain.value = this.outputVolume;
                     
+                    // Connect audio graph
                     source.connect(gainNode);
-                    gainNode.connect(audioContext.destination);
+                    gainNode.connect(this.audioContext.destination);
                     
-                    source.start();
+                    // Add event listeners
+                    source.onended = () => {
+                        console.log('Audio playback finished');
+                        this.updateStatus('Ready for next translation', 'success');
+                    };
                     
-                    console.log('Playing translated audio');
+                    // Start playback
+                    source.start(0);
+                    
+                    console.log('Playing translated audio:', audioBuffer.duration.toFixed(2), 'seconds');
                     this.updateStatus('🔊 Playing translation...', 'success');
                     
                 } catch (error) {
                     console.error('Audio playback error:', error);
-                    this.updateStatus('Playback error', 'error');
+                    this.updateStatus(`Playback error: ${error.message}`, 'error');
+                    
+                    // Detailed error logging
+                    if (error.name === 'NotAllowedError') {
+                        console.error('Audio playback not allowed - user interaction required');
+                        this.updateStatus('Click to enable audio playback', 'error');
+                    } else if (error.name === 'NotSupportedError') {
+                        console.error('Audio format not supported');
+                        this.updateStatus('Audio format not supported by browser', 'error');
+                    }
                 }
             }
             

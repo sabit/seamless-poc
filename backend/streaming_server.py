@@ -480,13 +480,13 @@ if __name__ == "__main__":
     
     if ssl_context:
         logger.info("🔒 Starting server with SSL support")
-        logger.info("🌐 HTTPS: https://localhost:8000")
-        logger.info("🔌 WSS: wss://localhost:8000/ws/stream")
+        logger.info("🌐 HTTPS: https://localhost:7860")
+        logger.info("🔌 WSS: wss://localhost:7860/ws/stream")
         
         uvicorn.run(
             app, 
             host="0.0.0.0", 
-            port=8000,
+            port=7860,
             ssl_keyfile="../ssl/key.pem",
             ssl_certfile="../ssl/cert.pem",
             ssl_version=ssl.PROTOCOL_TLS,

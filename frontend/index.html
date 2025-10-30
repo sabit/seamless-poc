@@ -343,6 +343,10 @@
                 this.micAnalyser = null;
                 this.micMeterUpdateInterval = null;
                 this.peakLevel = 0;
+                this.heartbeatInterval = null;
+                this.connectionTimeout = null;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
                 
                 this.initializeUI();
                 this.connectWebSocket();
@@ -444,6 +448,12 @@
                     this.websocket.close();
                 }
                 
+                // Clear any existing heartbeat
+                if (this.heartbeatInterval) {
+                    clearInterval(this.heartbeatInterval);
+                    this.heartbeatInterval = null;
+                }
+                
                 // Auto-detect WebSocket protocol and host
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const host = window.location.host;
@@ -453,10 +463,36 @@
                 this.updateStatus('Connecting to server...', 'info');
                 this.updateConnectionStatus('connecting');
                 
-                this.websocket = new WebSocket(wsUrl);
+                try {
+                    this.websocket = new WebSocket(wsUrl);
+                    
+                    // Set connection timeout
+                    this.connectionTimeout = setTimeout(() => {
+                        if (this.websocket && this.websocket.readyState === WebSocket.CONNECTING) {
+                            console.log('⏰ WebSocket connection timeout');
+                            this.websocket.close();
+                            this.updateStatus('Connection timeout. Retrying...', 'error');
+                        }
+                    }, 10000); // 10 second timeout
+                    
+                } catch (error) {
+                    console.error('❌ Failed to create WebSocket:', error);
+                    this.updateStatus('Failed to create connection', 'error');
+                    setTimeout(() => this.connectWebSocket(), 3000);
+                    return;
+                }
                 
                 this.websocket.onopen = () => {
                     console.log('✅ WebSocket connected successfully');
+                    
+                    // Clear connection timeout
+                    if (this.connectionTimeout) {
+                        clearTimeout(this.connectionTimeout);
+                        this.connectionTimeout = null;
+                    }
+                    
+                    // Reset reconnection attempts
+                    this.reconnectAttempts = 0;
                     
                     // Send streaming start message with proper language codes
                     const srcLang = this.sourceLanguage.value; // Use 'eng' or 'ben' directly
@@ -472,6 +508,9 @@
                     
                     console.log('📤 Sending start message:', startMessage);
                     this.websocket.send(JSON.stringify(startMessage));
+                    
+                    // Start heartbeat to keep connection alive
+                    this.startHeartbeat();
                     
                     // Update connection status immediately
                     this.updateConnectionStatus('connected');
@@ -497,6 +536,16 @@
                                 console.log('🏁 Streaming session ended');
                                 this.isStreaming = false;
                                 this.updateUIForStreaming(false);
+                            } else if (msg.type === 'pong') {
+                                console.log('💓 Pong received - connection alive');
+                            } else if (msg.type === 'stream_stopped') {
+                                console.log('⏹️ Stream stopped acknowledged by server');
+                            } else if (msg.type === 'processing_error') {
+                                console.log('⚠️ Server processing error:', msg.message);
+                                this.updateStatus('Processing error on server, but connection active', 'warning');
+                            } else if (msg.type === 'timeout_warning') {
+                                console.log('⏰ Server timeout warning:', msg.message);
+                                this.updateStatus('Connection timeout warning', 'warning');
                             } else {
                                 console.log('ℹ️ Other server message:', msg);
                             }
@@ -512,13 +561,36 @@
                 
                 this.websocket.onclose = (event) => {
                     console.log('🔴 WebSocket disconnected - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
-                    this.updateStatus('Disconnected from server. Trying to reconnect...', 'error');
+                    
+                    // Clear heartbeat and timeout
+                    if (this.heartbeatInterval) {
+                        clearInterval(this.heartbeatInterval);
+                        this.heartbeatInterval = null;
+                    }
+                    if (this.connectionTimeout) {
+                        clearTimeout(this.connectionTimeout);
+                        this.connectionTimeout = null;
+                    }
+                    
                     this.updateConnectionStatus('disconnected');
                     this.streamBtn.disabled = true;
                     
-                    // Try to reconnect after 3 seconds
-                    console.log('⏱️ Reconnecting in 3 seconds...');
-                    setTimeout(() => this.connectWebSocket(), 3000);
+                    // Handle different close codes
+                    if (event.code === 1000) {
+                        // Normal closure
+                        console.log('📋 Normal WebSocket closure');
+                        this.updateStatus('Connection closed normally', 'info');
+                    } else if (event.code === 1006) {
+                        // Abnormal closure (connection lost)
+                        console.log('💥 WebSocket connection lost unexpectedly');
+                        this.updateStatus('Connection lost. Reconnecting...', 'error');
+                        this.scheduleReconnect();
+                    } else {
+                        // Other error codes
+                        console.log(`⚠️ WebSocket closed with code ${event.code}: ${event.reason}`);
+                        this.updateStatus('Connection error. Reconnecting...', 'error');
+                        this.scheduleReconnect();
+                    }
                 };
                 
                 this.websocket.onerror = (error) => {
@@ -528,11 +600,59 @@
                         target: error.target?.readyState,
                         timestamp: new Date().toISOString()
                     });
+                    
+                    // Clear timers
+                    if (this.connectionTimeout) {
+                        clearTimeout(this.connectionTimeout);
+                        this.connectionTimeout = null;
+                    }
+                    
                     this.updateStatus('Connection error. Please check your network.', 'error');
                     this.updateConnectionStatus('disconnected');
                 };
             }
             
+            startHeartbeat() {
+                // Send ping every 30 seconds to keep connection alive
+                this.heartbeatInterval = setInterval(() => {
+                    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                        try {
+                            this.websocket.send(JSON.stringify({ type: "ping" }));
+                            console.log('💓 Heartbeat ping sent');
+                        } catch (error) {
+                            console.error('❌ Failed to send heartbeat:', error);
+                        }
+                    }
+                }, 30000); // 30 seconds
+                
+                console.log('💓 Heartbeat started');
+            }
+            
+            scheduleReconnect() {
+                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+                    console.log('🚫 Max reconnection attempts reached');
+                    this.updateStatus('Connection failed after multiple attempts. Please refresh the page.', 'error');
+                    return;
+                }
+                
+                this.reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000); // Exponential backoff, max 30s
+                
+                console.log(`⏱️ Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+                this.updateStatus(`Reconnecting in ${Math.ceil(delay/1000)}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`, 'warning');
+                
+                setTimeout(() => {
+                    if (this.reconnectAttempts > 0) { // Only reconnect if not manually stopped
+                        this.connectWebSocket();
+                    }
+                }, delay);
+            }
+            
+            isWebSocketReady() {
+                return this.websocket && 
+                       this.websocket.readyState === WebSocket.OPEN && 
+                       !this.websocket.bufferedAmount; // Ensure no pending data
+            }
 
             
             async playTranslatedAudio(audioData) {
@@ -699,6 +819,13 @@
             
 
             
+            checkConnectionHealth() {
+                if (!this.isWebSocketReady()) {
+                    console.log('🔍 Connection health check failed - reconnecting');
+                    this.scheduleReconnect();
+                }
+            }
+
             async toggleStreaming() {
                 if (!this.isStreaming) {
                     // Ensure WebSocket is connected before starting streaming
@@ -706,14 +833,19 @@
                         this.updateStatus('Connecting to server...', 'info');
                         this.connectWebSocket();
                         
-                        // Wait for connection or timeout
+                        // Wait for connection or timeout with better handling
                         let attempts = 0;
                         while ((!this.websocket || this.websocket.readyState !== WebSocket.OPEN) && attempts < 50) {
                             await new Promise(resolve => setTimeout(resolve, 100));
                             attempts++;
+                            
+                            // Check if connection failed during wait
+                            if (this.websocket && this.websocket.readyState === WebSocket.CLOSED) {
+                                break;
+                            }
                         }
                         
-                        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+                        if (!this.isWebSocketReady()) {
                             this.updateStatus('Failed to connect to server', 'error');
                             return;
                         }
@@ -784,7 +916,7 @@
                     let silenceCounter = 0;
                     
                     processor.onaudioprocess = (event) => {
-                        if (this.isStreaming && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                        if (this.isStreaming && this.isWebSocketReady()) {
                             const inputData = event.inputBuffer.getChannelData(0);
                             
                             // Check audio level and quality to avoid sending silence or noise
@@ -808,14 +940,20 @@
                                     
                                     // Send speech chunk to server
                                     try {
-                                        this.websocket.send(int16Data.buffer);
-                                        chunkCount++;
-                                        console.log(`📤 Sent speech chunk ${chunkCount}, ${speechBuffer.length} samples, RMS: ${rms.toFixed(4)}`);
-                                        
-                                        // Clear buffer after sending
-                                        speechBuffer = [];
+                                        if (this.isWebSocketReady()) {
+                                            this.websocket.send(int16Data.buffer);
+                                            chunkCount++;
+                                            console.log(`📤 Sent speech chunk ${chunkCount}, ${speechBuffer.length} samples, RMS: ${rms.toFixed(4)}`);
+                                            
+                                            // Clear buffer after sending
+                                            speechBuffer = [];
+                                        } else {
+                                            console.log('⚠️ WebSocket not ready, dropping speech chunk');
+                                            speechBuffer = [];
+                                        }
                                     } catch (error) {
                                         console.error('❌ Error sending speech chunk:', error);
+                                        speechBuffer = [];
                                     }
                                 }
                             } else {
@@ -830,12 +968,18 @@
                                     }
                                     
                                     try {
-                                        this.websocket.send(int16Data.buffer);
-                                        chunkCount++;
-                                        console.log(`📤 Sent final speech chunk ${chunkCount}, ${speechBuffer.length} samples`);
-                                        speechBuffer = [];
+                                        if (this.isWebSocketReady()) {
+                                            this.websocket.send(int16Data.buffer);
+                                            chunkCount++;
+                                            console.log(`📤 Sent final speech chunk ${chunkCount}, ${speechBuffer.length} samples`);
+                                            speechBuffer = [];
+                                        } else {
+                                            console.log('⚠️ WebSocket not ready, dropping final speech chunk');
+                                            speechBuffer = [];
+                                        }
                                     } catch (error) {
                                         console.error('❌ Error sending final speech chunk:', error);
+                                        speechBuffer = [];
                                     }
                                 }
                             }
@@ -961,8 +1105,13 @@
                 }
                 
                 // Send stop message to server
-                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                    this.websocket.send(JSON.stringify({ type: "stop_stream" }));
+                if (this.isWebSocketReady()) {
+                    try {
+                        this.websocket.send(JSON.stringify({ type: "stop_stream" }));
+                        console.log('📤 Sent stop_stream message');
+                    } catch (error) {
+                        console.error('❌ Error sending stop message:', error);
+                    }
                 }
                 
                 this.updateUIForStreaming(false);
@@ -999,8 +1148,10 @@
                         this.connectWebSocket();
                         setTimeout(() => this.startStreaming(), 2000);
                     }, 1000);
-                } else if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                } else if (this.isWebSocketReady()) {
                     // Just reconnect WebSocket with new language settings
+                    console.log('🔄 Reconnecting for language swap');
+                    this.reconnectAttempts = 0; // Reset reconnect attempts
                     this.websocket.close();
                     setTimeout(() => this.connectWebSocket(), 1000);
                 }

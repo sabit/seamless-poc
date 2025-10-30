@@ -532,24 +532,33 @@ async def websocket_endpoint(websocket: WebSocket):
                 "message": "SeamlessStreaming ready"
             })
             
-            # Main processing loop
+            # Main processing loop with timeout
             while True:
                 try:
-                    data = await websocket.receive()
+                    # Add timeout to prevent hanging on receive
+                    data = await asyncio.wait_for(websocket.receive(), timeout=60.0)
                     
                     if "bytes" in data:
                         # Process audio data
                         audio_data = data["bytes"]
                         logger.info(f"📥 Received audio data: {len(audio_data)} bytes")
                         
-                        result = await session.process_audio(audio_data)
-                        
-                        if result:
-                            logger.info(f"📤 Sending audio response: {len(result)} bytes")
-                            # Send translated audio as binary data
-                            await websocket.send_bytes(result)
-                        else:
-                            logger.warning("⚠️ No translation result from agent")
+                        try:
+                            result = await session.process_audio(audio_data)
+                            
+                            if result:
+                                logger.info(f"📤 Sending audio response: {len(result)} bytes")
+                                # Send translated audio as binary data
+                                await websocket.send_bytes(result)
+                            else:
+                                logger.warning("⚠️ No translation result from agent")
+                        except Exception as process_error:
+                            logger.error(f"❌ Audio processing error: {process_error}")
+                            # Continue processing instead of breaking the connection
+                            await websocket.send_json({
+                                "type": "processing_error",
+                                "message": "Audio processing failed, but connection remains active"
+                            })
                     
                     elif "text" in data:
                         # Handle JSON messages
@@ -557,16 +566,46 @@ async def websocket_endpoint(websocket: WebSocket):
                         if json_data.get("type") == "end_session":
                             logger.info(f"🔚 End session requested for {session_id}")
                             break
+                        elif json_data.get("type") == "ping":
+                            # Respond to heartbeat ping with pong
+                            try:
+                                await websocket.send_json({"type": "pong"})
+                                logger.debug(f"💓 Pong sent to {session_id}")
+                            except Exception as ping_error:
+                                logger.error(f"❌ Failed to send pong to {session_id}: {ping_error}")
+                        elif json_data.get("type") == "stop_stream":
+                            logger.info(f"⏹️ Stop stream requested for {session_id}")
+                            # Don't break, just acknowledge
+                            try:
+                                await websocket.send_json({"type": "stream_stopped"})
+                            except Exception as stop_error:
+                                logger.error(f"❌ Failed to send stream_stopped to {session_id}: {stop_error}")
                             
                 except WebSocketDisconnect:
                     logger.info(f"🔌 WebSocket disconnected: {session_id}")
                     break
+                except asyncio.TimeoutError:
+                    logger.warning(f"⏰ WebSocket timeout for {session_id}")
+                    try:
+                        await websocket.send_json({
+                            "type": "timeout_warning",
+                            "message": "Connection timeout, please check your network"
+                        })
+                    except:
+                        pass  # Connection might be dead
                 except Exception as e:
                     logger.error(f"❌ WebSocket error: {e}")
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Processing error: {str(e)}"
-                    })
+                    import traceback
+                    logger.error(f"📋 Error traceback: {traceback.format_exc()}")
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Processing error: {str(e)}"
+                        })
+                    except:
+                        # If we can't send the error message, connection is likely broken
+                        logger.error(f"💥 Failed to send error message to {session_id}, connection broken")
+                        break
         else:
             await websocket.send_json({
                 "type": "init_error", 

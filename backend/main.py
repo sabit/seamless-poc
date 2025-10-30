@@ -50,32 +50,23 @@ class SeamlessTranslator:
             raise e
     
     def audio_bytes_to_tensor(self, audio_bytes: bytes, sample_rate: int = 16000):
-        """Convert audio bytes to tensor for model input using librosa"""
+        """Convert audio bytes to tensor for model input"""
         try:
-            # Create a temporary wav file from bytes
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(audio_bytes)
-                temp_file.flush()
-                
-                # Load audio using librosa (more reliable than torchaudio)
-                waveform, sr = librosa.load(temp_file.name, sr=None, mono=False)
-                
-                # Clean up temp file
-                os.unlink(temp_file.name)
-                
-                # Convert to mono if stereo
-                if len(waveform.shape) > 1:
-                    waveform = librosa.to_mono(waveform)
-                
-                # Resample if necessary
-                if sr != sample_rate:
-                    waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate)
-                
-                # Convert numpy array to torch tensor
-                return torch.from_numpy(waveform).float()
+            # The audio bytes are raw PCM data from WebRTC (16-bit signed integers)
+            # Convert directly to numpy array without creating temp file
+            
+            # Convert bytes to numpy array (assuming 16-bit signed PCM)
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+            
+            # Convert from int16 to float32 and normalize to [-1, 1]
+            waveform = audio_np.astype(np.float32) / 32768.0
+            
+            # Convert numpy array to torch tensor
+            return torch.from_numpy(waveform).float()
                 
         except Exception as e:
             logger.error(f"Error processing audio bytes: {e}")
+            logger.error(f"Audio bytes length: {len(audio_bytes)}, first few bytes: {audio_bytes[:20]}")
             return None
     
     def tensor_to_audio_bytes(self, tensor: torch.Tensor, sample_rate: int = 16000):

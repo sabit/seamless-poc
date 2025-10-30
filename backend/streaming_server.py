@@ -152,6 +152,7 @@ class OfficialStreamingTranslator:
         args.frame_num = 1
         args.shift_size = 160  # MISSING PARAMETER - shift size for feature extraction
         args.segment_size = 480  # Segment size for feature extraction
+        args.denormalize = False  # MISSING PARAMETER - denormalization flag
         
         # OfflineWav2VecBertEncoderAgent.add_args()
         args.encoder_chunk_size = 480

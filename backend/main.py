@@ -70,10 +70,10 @@ class StreamingTranslator:
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.chunk_duration = 2.0  # Process chunks of 2 seconds
-        self.overlap_duration = 0.5  # 0.5 second overlap between chunks
+        self.chunk_duration = 4.0  # Process chunks of 4 seconds for better context
+        self.overlap_duration = 1.0  # 1 second overlap between chunks for continuity
         self.sample_rate = 16000
-        self.buffer = deque(maxlen=int(self.sample_rate * 10))  # 10 second circular buffer
+        self.buffer = deque(maxlen=int(self.sample_rate * 15))  # 15 second circular buffer for more context
         logger.info(f"Using device: {self.device}")
         
     async def initialize(self):
@@ -102,21 +102,29 @@ class StreamingTranslator:
             return None
         
         chunk_samples = int(self.sample_rate * self.chunk_duration)
+        # Take the most recent chunk for better real-time processing
         chunk = np.array(list(self.buffer)[-chunk_samples:])
         
-        # Remove processed samples (keeping overlap)
-        overlap_samples = int(self.sample_rate * self.overlap_duration)
-        samples_to_remove = chunk_samples - overlap_samples
-        for _ in range(min(samples_to_remove, len(self.buffer))):
-            self.buffer.popleft()
-            
+        # Don't remove samples in streaming mode - keep accumulating for context
+        # This allows better translation continuity
+        
         return chunk
     
     async def process_streaming_chunk(self, chunk: np.ndarray, src_lang: str, tgt_lang: str) -> Optional[bytes]:
         """Process a single streaming chunk"""
         try:
+            # Check for minimum audio energy (avoid processing silence)
+            audio_energy = np.sqrt(np.mean(chunk ** 2))
+            if audio_energy < 0.01:  # Threshold for silence detection
+                logger.debug("Skipping chunk with low audio energy (likely silence)")
+                return None
+            
             # Convert to tensor
             waveform = torch.from_numpy(chunk).float()
+            
+            # Normalize audio to prevent clipping
+            if torch.max(torch.abs(waveform)) > 1.0:
+                waveform = waveform / torch.max(torch.abs(waveform))
             
             # Process with model
             inputs = self.processor(
@@ -126,20 +134,28 @@ class StreamingTranslator:
                 return_tensors="pt"
             ).to(self.device)
             
-            # Generate with streaming-optimized settings
+            # Generate with quality-focused settings
             with torch.no_grad():
-                # Use faster generation settings for streaming
-                torch.manual_seed(int(time.time() * 1000000) % 2**32)
+                # Use consistent seed for better translation consistency
+                torch.manual_seed(42)
+                
+                logger.info(f"Processing {chunk.shape[0]/self.sample_rate:.2f}s chunk: {src_lang} → {tgt_lang}")
+                start_time = time.time()
                 
                 audio_array = self.model.generate(
                     **inputs, 
                     tgt_lang=tgt_lang,
                     do_sample=True,
-                    temperature=0.6,  # Lower temperature for faster generation
-                    num_beams=1,  # Always use sampling for speed
-                    max_length=200,  # Limit output length for faster response
-                    pad_token_id=self.processor.tokenizer.pad_token_id
+                    temperature=0.1,  # Lower temperature for more deterministic, better quality
+                    num_beams=2,  # Use beam search for better quality
+                    max_length=400,  # Allow longer output for complete phrases
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    repetition_penalty=1.1,  # Prevent repetition
+                    length_penalty=1.0  # Neutral length penalty
                 )
+                
+                generation_time = time.time() - start_time
+                logger.info(f"Translation completed in {generation_time:.2f}s")
             
             # Convert to PCM bytes
             if isinstance(audio_array, torch.Tensor):
@@ -184,11 +200,11 @@ class StreamingSession:
         self.sample_rate = sample_rate
         self.running = False
         self.last_output_time = 0
-        self.min_output_interval = 0.5  # Minimum 500ms between outputs
+        self.min_output_interval = 1.0  # Minimum 1s between outputs for better quality
         # Use streaming buffer management without creating new translator
-        self.buffer = deque(maxlen=int(sample_rate * 10))  # 10 second circular buffer
-        self.chunk_duration = 2.0  # Process chunks of 2 seconds
-        self.overlap_duration = 0.5  # 0.5 second overlap between chunks
+        self.buffer = deque(maxlen=int(sample_rate * 15))  # 15 second circular buffer
+        self.chunk_duration = 5.0  # Process chunks of 5 seconds for better context
+        self.overlap_duration = 1.5  # 1.5 second overlap between chunks for continuity
     
     async def initialize(self):
         """Initialize the streaming session - no model loading needed"""
@@ -205,14 +221,12 @@ class StreamingSession:
             return None
         
         chunk_samples = int(self.sample_rate * self.chunk_duration)
+        # Take the most recent chunk for better real-time processing
         chunk = np.array(list(self.buffer)[-chunk_samples:])
         
-        # Remove processed samples (keeping overlap)
-        overlap_samples = int(self.sample_rate * self.overlap_duration)
-        samples_to_remove = chunk_samples - overlap_samples
-        for _ in range(min(samples_to_remove, len(self.buffer))):
-            self.buffer.popleft()
-            
+        # Don't remove samples in streaming mode for better continuity
+        # Keep accumulating context but limit buffer size via maxlen
+        
         return chunk
 
     async def process_audio_chunk(self, audio_data: bytes):
@@ -223,6 +237,11 @@ class StreamingSession:
                 audio_data = audio_data + b'\x00'
             
             audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            
+            # Log audio characteristics for debugging
+            audio_rms = np.sqrt(np.mean(audio_np ** 2))
+            audio_max = np.max(np.abs(audio_np))
+            logger.debug(f"Audio chunk: {len(audio_np)} samples, RMS: {audio_rms:.4f}, Max: {audio_max:.4f}")
             
             # Add to streaming buffer
             self.add_audio_chunk(audio_np)

@@ -356,7 +356,7 @@ class OfficialStreamingTranslator:
                         # If no pop result, try pushpop method (combined operation)
                         logger.info("🔄 PUSHPOP: Trying combined push+pop method")
                         pushpop_result = self.agent.pushpop(speech_segment)
-                        logger.info(f"� Pushpop result: {type(pushpop_result)} = {pushpop_result}")
+                        logger.info(f"� Pushpop result: {type(pushpop_result)}")
                         
                         if pushpop_result is not None:
                             action = pushpop_result

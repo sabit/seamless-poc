@@ -10,8 +10,16 @@ aiofiles>=22.1.0  # Gold image has 22.1.0
 
 # Missing packages that need to be installed
 python-multipart>=0.0.6
-# Note: torch, torchvision, torchaudio installed separately with CUDA support
-# Don't install torch here to avoid conflicts with CUDA versions
+
+# PyTorch ecosystem - specific versions for compatibility with fairseq2n
+# Note: Install these BEFORE seamless_communication to avoid conflicts
+torch==2.2.2
+torchaudio==2.2.2
+torchvision==0.17.2
+numpy==1.23.5
+fsspec==2024.2.0
+
+# Core ML packages
 transformers>=4.37.0
 accelerate>=0.25.0
 librosa>=0.10.1
@@ -23,6 +31,6 @@ huggingface-hub>=0.16.0
 # fairseq2 - will be installed automatically with seamless_communication
 # simuleval - will be installed automatically with seamless_communication
 
-# Already satisfied by gold image
-# numpy>=1.24.0 (has 1.25.2)  
+# Already satisfied by gold image (but may be overridden above for compatibility)
+# numpy>=1.24.0 (downgraded to 1.23.5 for fairseq2 compatibility)
 # scipy>=1.10.0 (has 1.11.4)

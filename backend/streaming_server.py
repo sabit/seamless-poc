@@ -150,9 +150,12 @@ class OfficialStreamingTranslator:
         args.upstream_idx = 0
         args.feature_dim = 1024
         args.frame_num = 1
+        args.shift_size = 160  # MISSING PARAMETER - shift size for feature extraction
+        args.segment_size = 480  # Segment size for feature extraction
         
         # OfflineWav2VecBertEncoderAgent.add_args()
         args.encoder_chunk_size = 480
+        args.encoder_segment_size = 480  # Additional encoder parameter
         
         # UnitYMMATextDecoderAgent.add_args()
         args.min_starting_wait_w2vbert = 16
@@ -171,12 +174,24 @@ class OfficialStreamingTranslator:
         args.waitk_lagging = 3
         args.quality_metrics = "BLEU"
         args.latency_metrics = "StartOffset EndOffset"
+        args.segment_size = 480  # Base segment size
+        args.chunk_size = 480  # Base chunk size
         
         # === Additional Framework Parameters ===
         args.output = None
         args.config = None
         args.no_gpu = False
         args.model_name = args.unity_model_name  # Some agents expect this
+        
+        # === Additional Agent Parameters (to prevent AttributeError) ===
+        args.window_size = 480  # Window size for processing
+        args.hop_length = 160  # Hop length for feature extraction
+        args.n_fft = 512  # FFT size for spectrograms
+        args.win_length = 400  # Window length
+        args.center = True  # Center padding for STFT
+        args.pad_mode = 'reflect'  # Padding mode
+        args.normalize = True  # Normalize features
+        args.preemphasis = 0.97  # Preemphasis coefficient
         
         # === Language Configuration ===
         args.source_lang = self.source_lang
@@ -201,7 +216,9 @@ class OfficialStreamingTranslator:
         logger.info(f"   📊 Dtype: {args.dtype}")
         logger.info(f"   🔢 Min unit chunk size: {args.min_unit_chunk_size}")
         logger.info(f"   ⏱️  Duration factor: {args.d_factor}")
-        logger.info(f"   🗣️  Languages: {args.source_lang} → {args.target_lang}")
+        logger.info(f"   � Shift size: {args.shift_size}")
+        logger.info(f"   📐 Segment size: {args.segment_size}")
+        logger.info(f"   �🗣️  Languages: {args.source_lang} → {args.target_lang}")
         
         return args
         

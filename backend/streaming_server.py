@@ -44,6 +44,14 @@ class TeeLogger:
     def flush(self):
         self.original_stream.flush()
         self.log_file.flush()
+    
+    def isatty(self):
+        """Return whether this is an 'interactive' stream"""
+        return hasattr(self.original_stream, 'isatty') and self.original_stream.isatty()
+    
+    def __getattr__(self, name):
+        """Delegate any other attributes to the original stream"""
+        return getattr(self.original_stream, name)
 
 # Setup comprehensive logging (save to project root)
 log_file = open('../seamless_full_debug.log', 'w', encoding='utf-8')

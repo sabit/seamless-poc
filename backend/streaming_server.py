@@ -45,25 +45,69 @@ LANGUAGE_MAPPING = {
 
 # Try to import official SeamlessStreaming components
 try:
+    # Core seamless streaming agents
     from seamless_communication.streaming.agents.seamless_streaming_s2st import SeamlessStreamingS2STAgent
     from seamless_communication.streaming.agents.seamless_streaming_s2t import SeamlessStreamingS2TAgent
-    from simuleval.data.segments import SpeechSegment, EmptySegment, Segment
+    
+    # Core SimulEval components
+    from simuleval.data.segments import SpeechSegment, EmptySegment
     from simuleval.agents.actions import ReadAction, WriteAction
-    from simuleval.online.agent_pipeline import AgentPipeline
-    from simuleval.agents import build_agent
+    
+    # Try to find the correct build_agent function
+    try:
+        from simuleval.agents import build_agent
+    except ImportError:
+        try:
+            from simuleval.agents.agent import build_agent
+        except ImportError:
+            # If build_agent is not available, we'll create a simple wrapper
+            def build_agent(agent_class, args):
+                return agent_class(args)
+            build_agent = build_agent
+    
+    # Optional components (not critical)
+    try:
+        from simuleval.online.agent_pipeline import AgentPipeline
+    except ImportError:
+        try:
+            from simuleval.agents.pipeline import AgentPipeline
+        except ImportError:
+            AgentPipeline = None
+    
     import fairseq2  # Required for seamless models
+    
     OFFICIAL_STREAMING = True
     logger.info("✅ Official SeamlessStreaming agents available")
+    logger.info("✅ SeamlessStreamingS2STAgent imported successfully")
+    logger.info("✅ SimulEval components imported successfully")
+    logger.info("✅ fairseq2 available")
+    if AgentPipeline:
+        logger.info("✅ AgentPipeline available")
+    else:
+        logger.info("ℹ️  AgentPipeline not available (not critical)")
+    logger.info("🎯 Using official streaming implementation")
+    
 except ImportError as e:
     OFFICIAL_STREAMING = False
     logger.error(f"❌ Official SeamlessStreaming not available: {e}")
-    logger.warning("Please install seamless_communication properly for official streaming support")
+    logger.info("ℹ️  Falling back to improved chunked implementation")
     
-    # Fallback imports
+    # Fallback imports - try both v2 and v1 models
     try:
-        from transformers import SeamlessM4TForSpeechToSpeech, SeamlessM4TProcessor
+        # Try v2 model first (better quality)
+        try:
+            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech as SeamlessM4TForSpeechToSpeech
+            from transformers.models.seamless_m4t.processing_seamless_m4t import SeamlessM4TProcessor
+            FALLBACK_MODEL = "facebook/seamless-m4t-v2-large"
+            logger.info("📦 Using SeamlessM4T v2 fallback model")
+        except ImportError:
+            # Fallback to v1 model
+            from transformers import SeamlessM4TForSpeechToSpeech, SeamlessM4TProcessor
+            FALLBACK_MODEL = "facebook/seamless-m4t-large"
+            logger.info("📦 Using SeamlessM4T v1 fallback model")
+        
         FALLBACK_AVAILABLE = True
-        logger.info("📦 Fallback to transformers SeamlessM4T")
+        logger.info("✅ Fallback implementation ready")
     except ImportError:
         FALLBACK_AVAILABLE = False
         logger.error("❌ No translation models available")
@@ -113,8 +157,27 @@ class OfficialStreamingTranslator:
             else:
                 raise ValueError(f"Unsupported task: {task}")
             
-            # Build the agent
-            self.agent = build_agent(agent_class, agent_args)
+            # Build the agent - try build_agent first, fallback to direct instantiation
+            try:
+                self.agent = build_agent(agent_class, agent_args)
+                logger.info("✅ Agent built using build_agent function")
+            except Exception as build_error:
+                logger.warning(f"⚠️ build_agent failed: {build_error}")
+                logger.info("🔄 Trying direct agent instantiation...")
+                try:
+                    # Convert args dict to object-like structure that agents expect
+                    class Args:
+                        def __init__(self, **kwargs):
+                            for key, value in kwargs.items():
+                                setattr(self, key, value)
+                    
+                    args_obj = Args(**agent_args)
+                    self.agent = agent_class(args_obj)
+                    logger.info("✅ Agent created using direct instantiation")
+                except Exception as direct_error:
+                    logger.error(f"❌ Direct instantiation also failed: {direct_error}")
+                    raise direct_error
+            
             self.initialized = True
             
             logger.info("✅ Official streaming agent initialized successfully")
@@ -184,13 +247,13 @@ class FallbackStreamingTranslator:
     async def initialize(self, src_lang="eng", tgt_lang="ben"):
         """Initialize the fallback model"""
         try:
-            logger.info("Loading fallback SeamlessM4T model...")
+            logger.info(f"Loading fallback model: {FALLBACK_MODEL}")
             self.model = SeamlessM4TForSpeechToSpeech.from_pretrained(
-                "facebook/seamless-m4t-large",
+                FALLBACK_MODEL,
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
             ).to(self.device)
             
-            self.processor = SeamlessM4TProcessor.from_pretrained("facebook/seamless-m4t-large")
+            self.processor = SeamlessM4TProcessor.from_pretrained(FALLBACK_MODEL)
             logger.info("✅ Fallback model loaded successfully")
             
         except Exception as e:
@@ -458,7 +521,18 @@ if __name__ == "__main__":
     if args.ssl_keyfile and args.ssl_certfile:
         import ssl
         
-        ssl_context = ssl.SSLContext(getattr(ssl, f"PROTOCOL_{args.ssl_version}"))
+        # Use modern SSL context creation (avoiding deprecated PROTOCOL constants)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        
+        # Set minimum TLS version based on user preference
+        if args.ssl_version == 'TLSv1_2':
+            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        elif args.ssl_version == 'TLSv1_1':
+            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_1
+        else:  # TLSv1
+            ssl_context.minimum_version = ssl.TLSVersion.TLSv1
+        
+        # Load certificate and key
         ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
         
         if args.ssl_ca_certs:
@@ -495,6 +569,5 @@ if __name__ == "__main__":
         log_level="info",
         ssl_keyfile=args.ssl_keyfile,
         ssl_certfile=args.ssl_certfile,
-        ssl_ca_certs=args.ssl_ca_certs,
-        ssl_version=getattr(__import__('ssl'), f"PROTOCOL_{args.ssl_version}") if ssl_config else None
+        ssl_ca_certs=args.ssl_ca_certs
     )

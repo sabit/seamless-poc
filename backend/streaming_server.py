@@ -317,7 +317,6 @@ class OfficialStreamingTranslator:
                 # Based on SeamlessStreaming research: UnitYAgentPipeline.pop() handles sequential processing
                 
                 # Create proper SpeechSegment from audio data
-                from simuleval.data.segments import SpeechSegment
                 speech_segment = SpeechSegment(
                     content=segment,
                     finished=segment_finished,

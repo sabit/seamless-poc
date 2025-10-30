@@ -279,28 +279,13 @@ sessions: Dict[str, StreamingSession] = {}
 # FastAPI app setup
 app = FastAPI(title="SeamlessStreaming API", version="1.0.0")
 
-# Mount frontend static files (conditionally based on directory structure)
-import os
-frontend_paths = ["../frontend", "frontend", "./frontend"]
-frontend_dir = None
-for path in frontend_paths:
-    if os.path.exists(path):
-        frontend_dir = path
-        break
-
-if frontend_dir:
-    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
-    logger.info(f"✅ Frontend mounted from: {frontend_dir}")
-else:
-    logger.warning("⚠️  Frontend directory not found - static files not mounted")
+# Mount frontend static files
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 @app.get("/")
 async def read_root():
     """Serve the frontend HTML"""
-    if frontend_dir:
-        return FileResponse(f"{frontend_dir}/index.html")
-    else:
-        return {"message": "Frontend not available", "api": "SeamlessStreaming API"}
+    return FileResponse("frontend/index.html")
 
 @app.get("/health")
 async def health_check():

@@ -126,27 +126,50 @@ class OfficialStreamingTranslator:
         try:
             logger.info(f"Initializing official SeamlessStreaming agent for {task}: {src_lang} → {tgt_lang}")
             
-            # Configure agent arguments
+            # Configure agent arguments with all required parameters
             agent_args = {
+                # Device and model settings
                 "device": self.device,
                 "dtype": "fp16" if self.device == "cuda" else "fp32",
+                "fp16": self.device == "cuda",
                 "task": task,
                 "tgt_lang": tgt_lang,
                 "src_lang": src_lang,
-                # Unity model for speech encoder and T2U
+                
+                # Model names
                 "unity_model_name": "seamless_streaming_unity",
-                # Monotonic decoder for streaming text generation
                 "monotonic_decoder_model_name": "seamless_streaming_monotonic_decoder",
+                
                 # VAD settings
                 "vad": True,
                 "vad_chunk_size": 480,  # 30ms chunks at 16kHz
-                # Latency control
+                "vad_threshold": 0.5,
+                
+                # Latency and quality control
                 "min_starting_wait": 1000,  # Wait for 1 second of audio
                 "max_len_a": 0.0,
                 "max_len_b": 100,
-                # Quality settings
                 "beam_size": 3,
                 "no_repeat_ngram_size": 3,
+                
+                # Additional required parameters
+                "output": None,  # Not needed for API usage
+                "log_level": "INFO",
+                "port": None,  # Not needed for direct usage
+                "host": None,  # Not needed for direct usage
+                
+                # Model loading settings
+                "gated_model_dir": None,
+                "model_name": None,
+                
+                # Generation settings
+                "temperature": 1.0,
+                "length_penalty": 1.0,
+                "max_new_tokens": 256,
+                
+                # Audio settings
+                "sample_rate": self.sample_rate,
+                "chunk_size": 4096,
             }
             
             # Select appropriate agent class
@@ -168,8 +191,44 @@ class OfficialStreamingTranslator:
                     # Convert args dict to object-like structure that agents expect
                     class Args:
                         def __init__(self, **kwargs):
+                            # Set default values for commonly expected attributes
+                            defaults = {
+                                'device': 'cpu',
+                                'dtype': 'fp32',
+                                'fp16': False,
+                                'task': 's2st',
+                                'tgt_lang': 'ben',
+                                'src_lang': 'eng',
+                                'unity_model_name': 'seamless_streaming_unity',
+                                'monotonic_decoder_model_name': 'seamless_streaming_monotonic_decoder',
+                                'vad': True,
+                                'vad_chunk_size': 480,
+                                'vad_threshold': 0.5,
+                                'min_starting_wait': 1000,
+                                'max_len_a': 0.0,
+                                'max_len_b': 100,
+                                'beam_size': 3,
+                                'no_repeat_ngram_size': 3,
+                                'output': None,
+                                'log_level': 'INFO',
+                                'sample_rate': 16000,
+                                'chunk_size': 4096,
+                                'temperature': 1.0,
+                                'length_penalty': 1.0,
+                                'max_new_tokens': 256
+                            }
+                            
+                            # Set defaults first
+                            for key, value in defaults.items():
+                                setattr(self, key, value)
+                            
+                            # Override with provided kwargs
                             for key, value in kwargs.items():
                                 setattr(self, key, value)
+                        
+                        def __getattr__(self, name):
+                            # Return None for any missing attributes instead of raising AttributeError
+                            return None
                     
                     args_obj = Args(**agent_args)
                     self.agent = agent_class(args_obj)
@@ -184,6 +243,8 @@ class OfficialStreamingTranslator:
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize official streaming agent: {e}")
+            logger.error(f"Error details: {str(e)}")
+            logger.info("🔄 Will fall back to improved chunked implementation")
             self.initialized = False
             raise e
     
@@ -344,19 +405,40 @@ class StreamingSession:
     async def initialize(self):
         """Initialize the session with appropriate translator"""
         if OFFICIAL_STREAMING:
-            self.translator = OfficialStreamingTranslator()
-            await self.translator.initialize(
-                task="s2st",
-                src_lang=self.src_lang,
-                tgt_lang=self.tgt_lang
-            )
-            logger.info("🎯 Using official SeamlessStreaming")
-        elif FALLBACK_AVAILABLE:
-            self.translator = FallbackStreamingTranslator()
-            await self.translator.initialize(self.src_lang, self.tgt_lang)
-            logger.info("🔄 Using fallback implementation")
-        else:
-            raise RuntimeError("No translation backend available")
+            try:
+                self.translator = OfficialStreamingTranslator()
+                await self.translator.initialize(
+                    task="s2st",
+                    src_lang=self.src_lang,
+                    tgt_lang=self.tgt_lang
+                )
+                logger.info("🎯 Using official SeamlessStreaming")
+                return
+            except Exception as e:
+                logger.warning(f"⚠️ Official streaming failed to initialize: {e}")
+                logger.info("🔄 Falling back to improved implementation...")
+        
+        # Fall back to improved implementation
+        try:
+            # Check fallback availability at runtime
+            fallback_available = True
+            try:
+                from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
+            except ImportError:
+                try:
+                    from transformers import SeamlessM4TForSpeechToSpeech
+                except ImportError:
+                    fallback_available = False
+            
+            if fallback_available:
+                self.translator = FallbackStreamingTranslator()
+                await self.translator.initialize(self.src_lang, self.tgt_lang)
+                logger.info("✅ Using improved fallback implementation")
+            else:
+                raise RuntimeError("No translation backend available")
+        except Exception as fallback_error:
+            logger.error(f"❌ Fallback initialization also failed: {fallback_error}")
+            raise RuntimeError("All translation backends failed to initialize")
     
     async def process_audio_chunk(self, audio_data: bytes):
         """Process incoming audio chunk"""

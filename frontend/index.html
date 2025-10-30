@@ -220,9 +220,19 @@
                 </div>
             </div>
             
+            <div class="mode-selection" style="text-align: center; margin-bottom: 20px;">
+                <label style="margin-right: 20px;">
+                    <input type="radio" name="mode" value="complete" checked> Complete Recording
+                </label>
+                <label>
+                    <input type="radio" name="mode" value="streaming"> Continuous Streaming
+                </label>
+            </div>
+            
             <div class="record-controls">
                 <button class="record-btn" id="recordBtn">🎤 Start Recording</button>
                 <button class="record-btn" id="stopBtn" style="display: none;">⏹️ Stop</button>
+                <button class="record-btn" id="streamBtn" style="display: none;">🌊 Start Streaming</button>
             </div>
             
             <div class="audio-controls">
@@ -246,6 +256,8 @@
                 this.mediaRecorder = null;
                 this.audioStream = null;
                 this.isRecording = false;
+                this.isStreaming = false;
+                this.streamingMode = 'complete'; // 'complete' or 'streaming'
                 this.audioContext = null;
                 this.currentAudioSource = null;
                 this.currentSessionId = null;
@@ -254,6 +266,8 @@
                 this.lastAudioTime = 0;
                 this.clientId = Math.random().toString(36).substr(2, 9);
                 this.outputVolume = 0.8;
+                this.streamingProcessor = null;
+                this.audioWorkletNode = null;
                 
                 this.initializeUI();
                 this.connectWebSocket();
@@ -315,6 +329,7 @@
             initializeUI() {
                 this.recordBtn = document.getElementById('recordBtn');
                 this.stopBtn = document.getElementById('stopBtn');
+                this.streamBtn = document.getElementById('streamBtn');
                 this.swapBtn = document.getElementById('swapBtn');
                 this.sourceLanguage = document.getElementById('sourceLanguage');
                 this.targetLanguage = document.getElementById('targetLanguage');
@@ -322,22 +337,54 @@
                 this.connectionStatus = document.getElementById('connectionStatus');
                 this.outputVolumeSlider = document.getElementById('outputVolume');
                 this.volumeValue = document.getElementById('volumeValue');
+                this.modeRadios = document.querySelectorAll('input[name="mode"]');
                 
                 this.recordBtn.addEventListener('click', () => this.startRecording());
                 this.stopBtn.addEventListener('click', () => this.stopRecording());
+                this.streamBtn.addEventListener('click', () => this.toggleStreaming());
                 this.swapBtn.addEventListener('click', () => this.swapLanguages());
+                
+                // Mode selection
+                this.modeRadios.forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        this.streamingMode = e.target.value;
+                        this.updateUIForMode();
+                        
+                        // Reconnect WebSocket with appropriate endpoint
+                        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                            this.websocket.close();
+                            setTimeout(() => this.connectWebSocket(), 1000);
+                        }
+                    });
+                });
                 
                 this.outputVolumeSlider.addEventListener('input', (e) => {
                     this.outputVolume = parseFloat(e.target.value);
                     this.volumeValue.textContent = `${Math.round(this.outputVolume * 100)}%`;
                 });
+                
+                // Initial UI state
+                this.updateUIForMode();
+            }
+            
+            updateUIForMode() {
+                if (this.streamingMode === 'streaming') {
+                    this.recordBtn.style.display = 'none';
+                    this.streamBtn.style.display = 'inline-block';
+                    this.updateStatus('Click "Start Streaming" for continuous real-time translation', 'info');
+                } else {
+                    this.recordBtn.style.display = 'inline-block';
+                    this.streamBtn.style.display = 'none';
+                    this.updateStatus('Click "Start Recording" to record and translate complete phrases', 'info');
+                }
             }
             
             connectWebSocket() {
-                // Connect to the VM server
-                const wsUrl = 'wss://34.81.26.139:7860/ws/translate';
+                const wsUrl = this.streamingMode === 'streaming' ? 
+                    'wss://34.81.26.139:7860/ws/stream' : 
+                    'wss://34.81.26.139:7860/ws/translate';
                 
-                console.log('🔗 Attempting WebSocket connection to:', wsUrl);
+                console.log('🔗 Attempting WebSocket connection to:', wsUrl, 'Mode:', this.streamingMode);
                 this.updateStatus('Connecting to server...', 'info');
                 this.updateConnectionStatus('connecting');
                 
@@ -346,8 +393,14 @@
                 this.websocket.onopen = () => {
                     console.log('✅ WebSocket connected successfully');
                     
-                    // Send start message (like echo server)
-                    const startMessage = {
+                    // Send appropriate start message based on mode
+                    const startMessage = this.streamingMode === 'streaming' ? {
+                        type: "start_stream",
+                        src_lang: this.sourceLanguage.value,
+                        tgt_lang: this.targetLanguage.value,
+                        sample_rate: 16000,
+                        chunk_size: 1024
+                    } : {
                         type: "start",
                         src_lang: this.sourceLanguage.value,
                         tgt_lang: this.targetLanguage.value,
@@ -367,14 +420,19 @@
                         console.log('📄 JSON message received:', event.data);
                         try {
                             const msg = JSON.parse(event.data);
-                            if (msg.type === 'ready') {
+                            if (msg.type === 'ready' || msg.type === 'stream_ready') {
                                 console.log('🟢 Session ready - translation system active');
                                 this.updateStatus('Connected! Ready to translate.', 'success');
                                 this.updateConnectionStatus('connected');
                                 this.recordBtn.disabled = false;
+                                this.streamBtn.disabled = false;
                             } else if (msg.type === 'error') {
                                 console.error('❌ Server error:', msg.msg);
                                 this.updateStatus('Server error: ' + msg.msg, 'error');
+                            } else if (msg.type === 'stream_end') {
+                                console.log('🏁 Streaming session ended');
+                                this.isStreaming = false;
+                                this.updateUIForStreaming(false);
                             } else {
                                 console.log('ℹ️ Other server message:', msg);
                             }
@@ -382,8 +440,8 @@
                             console.error('❌ Failed to parse server message:', e, 'Raw data:', event.data);
                         }
                     } else {
-                        // Handle binary audio data (raw PCM) - only if recording is not active
-                        if (!this.isRecording) {
+                        // Handle binary audio data (raw PCM)
+                        if (!this.isRecording || this.isStreaming) {
                             console.log('🎵 Binary audio data received for playback');
                             this.playTranslatedAudio(event.data);
                         } else {
@@ -397,6 +455,7 @@
                     this.updateStatus('Disconnected from server. Trying to reconnect...', 'error');
                     this.updateConnectionStatus('disconnected');
                     this.recordBtn.disabled = true;
+                    this.streamBtn.disabled = true;
                     
                     // Try to reconnect after 3 seconds
                     console.log('⏱️ Reconnecting in 3 seconds...');
@@ -821,6 +880,117 @@
                 }
             }
             
+            async toggleStreaming() {
+                if (!this.isStreaming) {
+                    await this.startStreaming();
+                } else {
+                    this.stopStreaming();
+                }
+            }
+            
+            async startStreaming() {
+                try {
+                    console.log('🌊 Starting continuous streaming...');
+                    
+                    // Get microphone access
+                    this.audioStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: false
+                        }
+                    });
+                    
+                    console.log('✅ Microphone access granted for streaming');
+                    
+                    // Create AudioContext for processing
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 16000
+                        });
+                    }
+                    
+                    if (this.audioContext.state === 'suspended') {
+                        await this.audioContext.resume();
+                    }
+                    
+                    // Create MediaStreamAudioSourceNode
+                    const source = this.audioContext.createMediaStreamSource(this.audioStream);
+                    
+                    // Create ScriptProcessorNode for audio processing (fallback for older browsers)
+                    const processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                    
+                    processor.onaudioprocess = (event) => {
+                        if (this.isStreaming && this.websocket.readyState === WebSocket.OPEN) {
+                            const inputData = event.inputBuffer.getChannelData(0);
+                            
+                            // Convert float32 to int16
+                            const int16Data = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
+                            }
+                            
+                            // Send audio chunk to server
+                            this.websocket.send(int16Data.buffer);
+                        }
+                    };
+                    
+                    // Connect audio graph
+                    source.connect(processor);
+                    processor.connect(this.audioContext.destination);
+                    
+                    this.streamingProcessor = processor;
+                    this.isStreaming = true;
+                    this.updateUIForStreaming(true);
+                    
+                    console.log('🌊 Streaming started successfully');
+                    this.updateStatus('🌊 Streaming... Speak continuously!', 'info');
+                    
+                } catch (error) {
+                    console.error('Streaming error:', error);
+                    this.updateStatus('Microphone access denied or streaming setup failed', 'error');
+                }
+            }
+            
+            stopStreaming() {
+                console.log('⏹️ Stopping streaming...');
+                
+                this.isStreaming = false;
+                
+                if (this.streamingProcessor) {
+                    this.streamingProcessor.disconnect();
+                    this.streamingProcessor = null;
+                }
+                
+                if (this.audioStream) {
+                    this.audioStream.getTracks().forEach(track => track.stop());
+                    this.audioStream = null;
+                }
+                
+                // Send stop message to server
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.send(JSON.stringify({ type: "stop_stream" }));
+                }
+                
+                this.updateUIForStreaming(false);
+                console.log('✅ Streaming stopped');
+                this.updateStatus('Streaming stopped. Click "Start Streaming" to resume.', 'info');
+            }
+            
+            updateUIForStreaming(isActive) {
+                if (isActive) {
+                    this.streamBtn.textContent = '⏹️ Stop Streaming';
+                    this.streamBtn.classList.add('recording');
+                    this.modeRadios.forEach(radio => radio.disabled = true);
+                } else {
+                    this.streamBtn.textContent = '🌊 Start Streaming';
+                    this.streamBtn.classList.remove('recording');
+                    this.modeRadios.forEach(radio => radio.disabled = false);
+                }
+            }
+            
             swapLanguages() {
                 const sourceValue = this.sourceLanguage.value;
                 const targetValue = this.targetLanguage.value;
@@ -832,6 +1002,12 @@
                 
                 console.log('✅ Languages swapped successfully');
                 this.updateStatus('Languages swapped!', 'info');
+                
+                // Reconnect WebSocket with new language settings if connected
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.close();
+                    setTimeout(() => this.connectWebSocket(), 1000);
+                }
             }
             
             updateStatus(message, type) {

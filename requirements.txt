@@ -10,5 +10,6 @@ transformers==4.37.0
 librosa==0.10.1
 soundfile==0.12.1
 sentencepiece==0.1.99
+pydub==0.25.1
 
 # Note: torch, torchaudio, numpy are pre-installed in the base image

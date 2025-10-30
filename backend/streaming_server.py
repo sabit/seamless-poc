@@ -342,12 +342,12 @@ class OfficialStreamingTranslator:
                     # Use the original speech_segment as-is (no conversion)
                     push_result = self.agent.push(speech_segment)
                     
-                    logger.info(f"🔼 Push result: {type(push_result)} = {push_result}")
+                    logger.info(f"🔼 Push result: {type(push_result)}")
                     
                     # POP: Try to get translation output
                     logger.info("🔽 POP: Attempting to retrieve translation")
                     pop_result = self.agent.pop()
-                    logger.info(f"🔽 Pop result: {type(pop_result)} = {pop_result}")
+                    logger.info(f"🔽 Pop result: {type(pop_result)}")
                     
                     if pop_result is not None:
                         action = pop_result

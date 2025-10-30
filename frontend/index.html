@@ -362,13 +362,14 @@
                     console.log('✅ WebSocket connected successfully');
                     
                     // Send streaming start message with proper language codes
-                    const srcLang = this.sourceLanguage.value === 'eng' ? 'en' : 'bn';
-                    const tgtLang = this.targetLanguage.value === 'eng' ? 'en' : 'bn';
+                    const srcLang = this.sourceLanguage.value; // Use 'eng' or 'ben' directly
+                    const tgtLang = this.targetLanguage.value; // Use 'eng' or 'ben' directly
                     
                     const startMessage = {
                         type: "start_stream",
-                        src_lang: srcLang,
-                        tgt_lang: tgtLang,
+                        srcLang: srcLang,
+                        tgtLang: tgtLang,
+                        task: "s2st",
                         sample_rate: 16000
                     };
                     

@@ -230,19 +230,22 @@ class OfficialStreamingTranslator:
             logger.error(f"📋 Traceback: {traceback.format_exc()}")
             return False
     
-    async def translate_stream(self, audio_chunk: bytes) -> Optional[str]:
-        """Process audio chunk and return translation if available"""
+    async def translate_stream(self, audio_chunk: bytes) -> Optional[bytes]:
+        """Process audio chunk and return translated audio if available"""
         if not self.initialized or not self.agent:
             logger.warning("⚠️  Agent not initialized")
             return None
             
         try:
-            # Convert audio bytes to numpy array
-            audio_np = np.frombuffer(audio_chunk, dtype=np.float32)
+            # Convert audio bytes to int16 array (frontend sends int16 PCM)
+            audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
+            
+            # Convert to float32 and normalize
+            audio_float = audio_np.astype(np.float32) / 32768.0
             
             # Create speech segment for the agent
             segment = SpeechSegment(
-                content=audio_np,
+                content=audio_float,
                 sample_rate=16000,
                 finished=False
             )
@@ -250,10 +253,24 @@ class OfficialStreamingTranslator:
             # Process with the streaming agent
             action = self.agent.policy(segment)
             
-            # Check if we have translation output
-            if hasattr(action, 'content') and action.content:
-                logger.info(f"🎯 Translation: {action.content}")
-                return action.content
+            # Check if we have audio translation output
+            if hasattr(action, 'content') and action.content is not None:
+                # For s2st, action.content should be audio samples
+                if isinstance(action.content, (list, np.ndarray)):
+                    # Convert audio samples to int16 PCM bytes
+                    if isinstance(action.content, list):
+                        audio_samples = np.array(action.content, dtype=np.float32)
+                    else:
+                        audio_samples = action.content.astype(np.float32)
+                    
+                    # Normalize and convert to int16
+                    audio_samples = np.clip(audio_samples, -1.0, 1.0)
+                    audio_int16 = (audio_samples * 32767).astype(np.int16)
+                    
+                    logger.info(f"� Generated audio translation: {len(audio_int16)} samples")
+                    return audio_int16.tobytes()
+                else:
+                    logger.warning(f"⚠️ Unexpected audio content type: {type(action.content)}")
                 
             return None
             
@@ -296,8 +313,8 @@ class StreamingSession:
             logger.error(f"❌ Session {self.session_id} failed to initialize")
             return False
     
-    async def process_audio(self, audio_chunk: bytes) -> Optional[str]:
-        """Process audio chunk and return translation"""
+    async def process_audio(self, audio_chunk: bytes) -> Optional[bytes]:
+        """Process audio chunk and return translated audio"""
         if not self.is_active:
             return None
             
@@ -306,7 +323,7 @@ class StreamingSession:
             result = await self.official_translator.translate_stream(audio_chunk)
             
             if result:
-                logger.info(f"📤 Session {self.session_id} translation: {result}")
+                logger.info(f"📤 Session {self.session_id} audio translation: {len(result)} bytes")
                 return result
                 
             return None
@@ -362,7 +379,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         if success:
             await websocket.send_json({
-                "type": "init_success",
+                "type": "stream_ready",
                 "message": "SeamlessStreaming ready"
             })
             
@@ -377,11 +394,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         result = await session.process_audio(audio_data)
                         
                         if result:
-                            await websocket.send_json({
-                                "type": "translation",
-                                "text": result,
-                                "session_id": session_id
-                            })
+                            # Send translated audio as binary data
+                            await websocket.send_bytes(result)
                     
                     elif "text" in data:
                         # Handle JSON messages
@@ -501,6 +515,6 @@ if __name__ == "__main__":
         uvicorn.run(
             app, 
             host="0.0.0.0", 
-            port=8000,
+            port=7860,
             log_level="info"
         )

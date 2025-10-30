@@ -141,6 +141,12 @@
             border: 1px solid #f5c6cb;
         }
         
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
         .audio-controls {
             display: flex;
             justify-content: center;
@@ -251,37 +257,49 @@
             
             enableAudioPlayback() {
                 let audioEnabled = false;
+                console.log('🎵 Setting up audio playback enablement...');
                 
                 // Enable audio playback on first user interaction
                 const enableAudio = async () => {
-                    if (audioEnabled) return;
+                    if (audioEnabled) {
+                        console.log('🎵 Audio already enabled, skipping');
+                        return;
+                    }
+                    
+                    console.log('👆 User interaction detected - enabling audio...');
                     
                     try {
                         if (!this.audioContext) {
+                            console.log('🎵 Creating AudioContext for user interaction...');
                             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                                 sampleRate: 16000
                             });
                         }
                         
+                        console.log('🎵 AudioContext state before resume:', this.audioContext.state);
                         if (this.audioContext.state === 'suspended') {
                             await this.audioContext.resume();
-                            console.log('Audio context resumed');
+                            console.log('✅ AudioContext resumed from user interaction');
                         }
                         
                         audioEnabled = true;
+                        console.log('🎉 Audio playback fully enabled!');
                         this.updateStatus('Audio enabled! Ready for translation', 'success');
                         
                         // Remove the event listeners after first interaction
                         document.removeEventListener('click', enableAudio);
                         document.removeEventListener('touchstart', enableAudio);
+                        console.log('🗑️ Audio enablement event listeners removed');
                         
                     } catch (error) {
-                        console.error('Failed to enable audio:', error);
+                        console.error('❌ Failed to enable audio:', error);
+                        console.error('Audio enable error details:', error.stack);
                         this.updateStatus('Audio setup failed - please refresh and try again', 'error');
                     }
                 };
                 
                 // Add event listeners for user interaction
+                console.log('👂 Adding click/touch listeners for audio enablement');
                 document.addEventListener('click', enableAudio);
                 document.addEventListener('touchstart', enableAudio);
                 
@@ -314,13 +332,14 @@
                 // Connect to the VM server
                 const wsUrl = 'wss://34.81.26.139:7860/ws/translate';
                 
+                console.log('🔗 Attempting WebSocket connection to:', wsUrl);
                 this.updateStatus('Connecting to server...', 'info');
                 this.updateConnectionStatus('connecting');
                 
                 this.websocket = new WebSocket(wsUrl);
                 
                 this.websocket.onopen = () => {
-                    console.log('WebSocket connected');
+                    console.log('✅ WebSocket connected successfully');
                     
                     // Send start message (like echo server)
                     const startMessage = {
@@ -331,44 +350,57 @@
                         format: "pcm_s16le"
                     };
                     
+                    console.log('📤 Sending start message:', startMessage);
                     this.websocket.send(JSON.stringify(startMessage));
                 };
                 
                 this.websocket.onmessage = (event) => {
+                    console.log('📥 WebSocket message received, type:', typeof event.data, 'size:', event.data.size || event.data.length);
+                    
                     if (typeof event.data === 'string') {
                         // Handle JSON control messages
+                        console.log('📄 JSON message received:', event.data);
                         try {
                             const msg = JSON.parse(event.data);
                             if (msg.type === 'ready') {
-                                console.log('Session ready');
+                                console.log('🟢 Session ready - translation system active');
                                 this.updateStatus('Connected! Ready to translate.', 'success');
                                 this.updateConnectionStatus('connected');
                                 this.recordBtn.disabled = false;
                             } else if (msg.type === 'error') {
-                                console.error('Server error:', msg.msg);
+                                console.error('❌ Server error:', msg.msg);
                                 this.updateStatus('Server error: ' + msg.msg, 'error');
+                            } else {
+                                console.log('ℹ️ Other server message:', msg);
                             }
                         } catch (e) {
-                            console.error('Failed to parse server message:', e);
+                            console.error('❌ Failed to parse server message:', e, 'Raw data:', event.data);
                         }
                     } else {
                         // Handle binary audio data (raw PCM)
+                        console.log('🎵 Binary audio data received for playback');
                         this.playTranslatedAudio(event.data);
                     }
                 };
                 
-                this.websocket.onclose = () => {
-                    console.log('WebSocket disconnected');
+                this.websocket.onclose = (event) => {
+                    console.log('🔴 WebSocket disconnected - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
                     this.updateStatus('Disconnected from server. Trying to reconnect...', 'error');
                     this.updateConnectionStatus('disconnected');
                     this.recordBtn.disabled = true;
                     
                     // Try to reconnect after 3 seconds
+                    console.log('⏱️ Reconnecting in 3 seconds...');
                     setTimeout(() => this.connectWebSocket(), 3000);
                 };
                 
                 this.websocket.onerror = (error) => {
-                    console.error('WebSocket error:', error);
+                    console.error('❌ WebSocket error occurred:', error);
+                    console.error('Error details:', {
+                        type: error.type,
+                        target: error.target?.readyState,
+                        timestamp: new Date().toISOString()
+                    });
                     this.updateStatus('Connection error. Please check your network.', 'error');
                     this.updateConnectionStatus('disconnected');
                 };
@@ -429,6 +461,7 @@
             
             async startRecording() {
                 try {
+                    console.log('🎤 Requesting microphone access...');
                     this.audioStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             sampleRate: 16000,
@@ -438,33 +471,43 @@
                         }
                     });
                     
+                    console.log('✅ Microphone access granted, stream tracks:', this.audioStream.getTracks().length);
+                    
                     // Try MediaRecorder with WAV format first (more compatible)
                     let options = { mimeType: 'audio/wav' };
                     
                     // Fall back to webm if WAV not supported
                     if (!MediaRecorder.isTypeSupported('audio/wav')) {
                         options = { mimeType: 'audio/webm;codecs=opus' };
-                        console.log('Using WebM format as fallback');
+                        console.log('⚠️ WAV not supported, using WebM format as fallback');
                     } else {
-                        console.log('Using WAV format');
+                        console.log('✅ Using WAV format for recording');
                     }
                     
+                    console.log('🎙️ Creating MediaRecorder with options:', options);
                     this.mediaRecorder = new MediaRecorder(this.audioStream, options);
                     
                     this.mediaRecorder.ondataavailable = (event) => {
                         if (event.data.size > 0 && this.websocket.readyState === WebSocket.OPEN) {
-                            console.log('Sending audio chunk:', event.data.size, 'bytes, type:', event.data.type);
+                            console.log('📊 Audio chunk available:', event.data.size, 'bytes, MIME type:', event.data.type);
+                            console.log('🌐 WebSocket ready state:', this.websocket.readyState, '(1=OPEN)');
                             this.convertAndSendAudio(event.data);
+                        } else {
+                            console.warn('⚠️ Skipping audio chunk - Size:', event.data.size, 'WebSocket state:', this.websocket.readyState);
                         }
                     };
                     
                     this.mediaRecorder.onerror = (event) => {
-                        console.error('MediaRecorder error:', event);
+                        console.error('❌ MediaRecorder error:', event);
+                        console.error('Error details:', {
+                            error: event.error,
+                            type: event.type,
+                            timestamp: new Date().toISOString()
+                        });
                         this.updateStatus('Recording error: ' + event.error, 'error');
                     };
                     
-                    this.mediaRecorder.start(1000); // 1 second chunks
-                    
+                    console.log('🎬 Starting MediaRecorder with 1-second intervals');
                     this.mediaRecorder.start(1000); // Collect data every 1 second
                     this.isRecording = true;
                     
@@ -472,6 +515,7 @@
                     this.stopBtn.style.display = 'inline-block';
                     this.recordBtn.classList.add('recording');
                     
+                    console.log('🔴 Recording started - UI updated');
                     this.updateStatus('🎤 Recording... Speak now!', 'info');
                     
                 } catch (error) {
@@ -481,13 +525,21 @@
             }
             
             stopRecording() {
+                console.log('⏹️ Stopping recording...');
+                
                 if (this.mediaRecorder && this.isRecording) {
+                    console.log('📊 MediaRecorder state before stop:', this.mediaRecorder.state);
                     this.mediaRecorder.stop();
                     this.isRecording = false;
+                    console.log('✅ MediaRecorder stopped');
                 }
                 
                 if (this.audioStream) {
-                    this.audioStream.getTracks().forEach(track => track.stop());
+                    console.log('🔇 Stopping audio stream tracks:', this.audioStream.getTracks().length);
+                    this.audioStream.getTracks().forEach(track => {
+                        console.log('  - Stopping track:', track.kind, track.label);
+                        track.stop();
+                    });
                     this.audioStream = null;
                 }
                 
@@ -495,81 +547,132 @@
                 this.stopBtn.style.display = 'none';
                 this.recordBtn.classList.remove('recording');
                 
+                console.log('🔄 UI reset to ready state');
                 this.updateStatus('Recording stopped. Click "Start Recording" to continue.', 'info');
             }
             
             async convertAndSendAudio(audioBlob) {
                 try {
+                    console.log('🔄 Converting audio blob for transmission...');
+                    console.log('📊 Blob details:', {
+                        size: audioBlob.size,
+                        type: audioBlob.type,
+                        lastModified: audioBlob.lastModified || 'N/A'
+                    });
+                    
                     // For browser compatibility, send the original audio blob
                     // Backend will handle the format detection and conversion
                     const arrayBuffer = await audioBlob.arrayBuffer();
+                    console.log('📤 Converted to ArrayBuffer:', arrayBuffer.byteLength, 'bytes');
                     
-                    console.log('Sending audio blob:', audioBlob.size, 'bytes, type:', audioBlob.type);
+                    // Verify WebSocket is still open
+                    if (this.websocket.readyState !== WebSocket.OPEN) {
+                        console.error('❌ WebSocket not open, state:', this.websocket.readyState);
+                        this.updateStatus('Connection lost during send', 'error');
+                        return;
+                    }
                     
                     // Send the raw audio data to server for processing
+                    console.log('🚀 Sending audio data to server...');
                     this.websocket.send(arrayBuffer);
+                    console.log('✅ Audio data sent successfully');
                     this.updateStatus('Processing translation...', 'info');
                     
                 } catch (error) {
-                    console.error('Error sending audio:', error);
-                    this.updateStatus('Audio send error', 'error');
+                    console.error('❌ Error sending audio:', error);
+                    console.error('Error stack:', error.stack);
+                    this.updateStatus('Audio send error: ' + error.message, 'error');
                 }
             }
             
             async playTranslatedAudio(audioData) {
                 try {
+                    console.log('Raw audio data received:', audioData.byteLength, 'bytes');
+                    console.log('Audio data type:', audioData.constructor.name);
+                    
                     // audioData is raw PCM bytes from server
                     const pcmArray = new Int16Array(audioData);
-                    console.log('Received translated PCM:', pcmArray.length, 'samples');
+                    console.log('Converted to PCM array:', pcmArray.length, 'samples');
                     
                     if (pcmArray.length === 0) {
-                        console.error('No audio data received');
+                        console.error('No PCM samples after conversion');
                         this.updateStatus('No audio data to play', 'error');
+                        return;
+                    }
+                    
+                    // Check for valid audio data (not all zeros)
+                    const nonZeroSamples = pcmArray.filter(sample => sample !== 0).length;
+                    console.log('Non-zero samples:', nonZeroSamples, 'out of', pcmArray.length);
+                    
+                    if (nonZeroSamples === 0) {
+                        console.error('Audio data contains only silence');
+                        this.updateStatus('Received silent audio - translation may have failed', 'error');
                         return;
                     }
                     
                     // Create or resume AudioContext
                     if (!this.audioContext) {
+                        console.log('🎵 Creating new AudioContext with 16kHz sample rate');
                         this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                             sampleRate: 16000
                         });
+                        console.log('✅ AudioContext created, state:', this.audioContext.state);
                     }
                     
                     // Resume AudioContext if suspended (required by browser policy)
                     if (this.audioContext.state === 'suspended') {
+                        console.log('⏸️ AudioContext suspended, attempting to resume...');
                         await this.audioContext.resume();
+                        console.log('▶️ AudioContext resumed, new state:', this.audioContext.state);
+                    } else {
+                        console.log('🔊 AudioContext already active, state:', this.audioContext.state);
                     }
                     
                     // Convert PCM to AudioBuffer for playback
+                    console.log('🎵 Creating AudioBuffer: 1 channel,', pcmArray.length, 'samples, 16kHz');
                     const audioBuffer = this.audioContext.createBuffer(1, pcmArray.length, 16000);
                     const channelData = audioBuffer.getChannelData(0);
+                    console.log('📊 AudioBuffer created, duration:', audioBuffer.duration.toFixed(3), 'seconds');
                     
                     // Convert int16 to float32 and normalize
+                    console.log('🔄 Converting PCM int16 to float32...');
+                    let minSample = 0, maxSample = 0;
                     for (let i = 0; i < pcmArray.length; i++) {
                         channelData[i] = Math.max(-1.0, Math.min(1.0, pcmArray[i] / 32768.0));
+                        minSample = Math.min(minSample, channelData[i]);
+                        maxSample = Math.max(maxSample, channelData[i]);
                     }
+                    console.log('📈 Audio range after conversion: min =', minSample.toFixed(3), 'max =', maxSample.toFixed(3));
                     
                     // Create audio source and gain node
+                    console.log('🎛️ Setting up audio graph...');
                     const source = this.audioContext.createBufferSource();
                     const gainNode = this.audioContext.createGain();
                     
                     source.buffer = audioBuffer;
                     gainNode.gain.value = this.outputVolume;
+                    console.log('🔊 Volume set to:', (this.outputVolume * 100).toFixed(0) + '%');
                     
                     // Connect audio graph
                     source.connect(gainNode);
                     gainNode.connect(this.audioContext.destination);
+                    console.log('🔗 Audio graph connected: Source → Gain → Destination');
                     
                     // Add event listeners
                     source.onended = () => {
-                        console.log('Audio playback finished');
+                        console.log('🏁 Audio playback finished successfully');
                         this.updateStatus('Ready for next translation', 'success');
                     };
                     
+                    source.onerror = (error) => {
+                        console.error('❌ Audio source error:', error);
+                    };
+                    
                     // Start playback
+                    console.log('▶️ Starting audio playback...');
                     source.start(0);
                     
-                    console.log('Playing translated audio:', audioBuffer.duration.toFixed(2), 'seconds');
+                    console.log('🎵 Playing translated audio:', audioBuffer.duration.toFixed(2), 'seconds');
                     this.updateStatus('🔊 Playing translation...', 'success');
                     
                 } catch (error) {
@@ -621,20 +724,27 @@
                 const sourceValue = this.sourceLanguage.value;
                 const targetValue = this.targetLanguage.value;
                 
+                console.log('🔄 Swapping languages:', sourceValue, '↔️', targetValue);
+                
                 this.sourceLanguage.value = targetValue;
                 this.targetLanguage.value = sourceValue;
                 
+                console.log('✅ Languages swapped successfully');
                 this.updateStatus('Languages swapped!', 'info');
             }
             
             updateStatus(message, type) {
+                console.log(`📱 Status update [${type.toUpperCase()}]:`, message);
                 this.statusMessage.textContent = message;
                 this.statusMessage.className = `status ${type}`;
             }
             
             updateConnectionStatus(status) {
-                this.connectionStatus.textContent = status === 'connected' ? 'Connected' : 
-                                                  status === 'connecting' ? 'Connecting...' : 'Disconnected';
+                const statusText = status === 'connected' ? 'Connected' : 
+                                 status === 'connecting' ? 'Connecting...' : 'Disconnected';
+                console.log('🔗 Connection status changed to:', statusText);
+                
+                this.connectionStatus.textContent = statusText;
                 this.connectionStatus.className = `connection-status ${status}`;
             }
         }

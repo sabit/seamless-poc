@@ -120,7 +120,7 @@ class OfficialStreamingTranslator:
         
         # Model configuration - using unity and monotonic multipath models  
         args.model_name = "seamless_streaming_unity"
-        args.vocoder_name = "vocoder_v2"  # Standard SeamlessM4T vocoder
+        # Note: Vocoder is integrated into unity model for streaming
         args.unity_model_name = "seamless_streaming_unity"
         args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
         

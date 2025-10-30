@@ -93,15 +93,109 @@ except ImportError as e:
     exit(1)
 
 class OfficialStreamingTranslator:
-    """Uses the official SeamlessStreaming agents for proper streaming translation"""
+    """Official SeamlessStreaming implementation using Facebook's agents"""
     
-    def __init__(self):
-        self.agent = None
+    def __init__(self, source_lang: str = "eng", target_lang: str = "ben"):
+        logger.info("🔧 Initializing official SeamlessStreaming translator...")
+        
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        
+        # Enforce CUDA requirement
         if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required for SeamlessStreaming models. CPU is not supported.")
-        self.device = "cuda"
-        self.sample_rate = 16000
-        self.initialized = False
+            raise RuntimeError("❌ CUDA is required for SeamlessStreaming. This model does not run on CPU.")
+        
+        self.device = torch.device("cuda")
+        self.dtype = torch.float16
+        
+        logger.info(f"Using device: {self.device} with dtype: {self.dtype}")
+        logger.info(f"Translation: {source_lang} → {target_lang}")
+        
+        try:
+            # Create Args object based on official source code patterns
+            self.args = self._create_official_args()
+            
+            # Initialize official SeamlessStreaming agent
+            logger.info("🚀 Creating SeamlessStreamingS2STAgent...")
+            self.agent = SeamlessStreamingS2STAgent(self.args)
+            logger.info("✅ Official SeamlessStreaming agent initialized successfully!")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize official agent: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    def _create_official_args(self):
+        """Create Args object based on official SeamlessStreaming source code"""
+        from argparse import Namespace
+        import torch
+        
+        # Create args matching the official implementation patterns
+        args = Namespace()
+        
+        # === Core UnitYPipelineMixin parameters ===
+        args.task = "s2st"  # Speech-to-Speech Translation
+        args.unity_model_name = "seamless_streaming_unity"
+        args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
+        args.sample_rate = 16000.0
+        args.dtype = "fp16"
+        args.device = "cuda"
+        args.fp16 = True
+        
+        # === Individual Agent Parameters (from add_args methods) ===
+        
+        # OnlineFeatureExtractorAgent parameters
+        args.upstream_idx = 0
+        args.feature_dim = 1024
+        args.frame_num = 1
+        
+        # OfflineWav2VecBertEncoderAgent parameters  
+        args.encoder_chunk_size = 480
+        
+        # UnitYMMATextDecoderAgent parameters
+        args.min_starting_wait_w2vbert = 16
+        args.min_starting_wait_mma = 4
+        
+        # NARUnitYUnitDecoderAgent parameters (CRITICAL - these were missing!)
+        args.min_unit_chunk_size = 50  # Required parameter
+        args.d_factor = 1.0  # Required parameter
+        
+        # VocoderAgent parameters
+        args.vocoder_name = "vocoder_v2"
+        
+        # === SimulEval Framework Parameters ===
+        args.source_segment_size = 480
+        args.target_segment_size = None
+        args.waitk_lagging = 3
+        args.quality_metrics = "BLEU"
+        args.latency_metrics = "StartOffset EndOffset"
+        
+        # === Device and Type Conversion ===
+        args.device = torch.device(args.device)
+        if args.dtype == "fp16" and args.device.type != "cpu":
+            args.dtype = torch.float16
+        else:
+            args.dtype = torch.float32
+        
+        # === Additional Framework Parameters ===
+        args.output = None
+        args.config = None
+        args.no_gpu = False
+        
+        # === Language Configuration ===
+        args.source_lang = self.source_lang
+        args.target_lang = self.target_lang
+        
+        logger.info("📝 Created official Args object with all required agent parameters")
+        logger.info(f"   - Task: {args.task}")
+        logger.info(f"   - Unity model: {args.unity_model_name}")
+        logger.info(f"   - Device: {args.device}")
+        logger.info(f"   - Min unit chunk size: {args.min_unit_chunk_size}")
+        logger.info(f"   - Duration factor: {args.d_factor}")
+        
+        return args
         
     async def initialize(self, task="s2st", src_lang="eng", tgt_lang="ben"):
         """Initialize the official streaming agent"""

@@ -121,6 +121,7 @@ class OfficialStreamingTranslator:
         # Model configuration - using unity and monotonic multipath models  
         args.model_name = "seamless_streaming_unity"
         args.vocoder_name = "vocoder_v2"  # Standard vocoder for SeamlessStreaming
+        args.vocoder_speaker_id = -1  # Default speaker ID for vocoder
         args.unity_model_name = "seamless_streaming_unity"
         args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
         

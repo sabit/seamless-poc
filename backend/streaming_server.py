@@ -256,18 +256,34 @@ class OfficialStreamingTranslator:
             
             logger.info(f"🎤 Created speech segment with {len(audio_float)} samples")
             
-            # Initialize agent states if needed
-            if not hasattr(self, 'agent_states') or self.agent_states is None:
-                self.agent_states = self.agent.build_states()
-                logger.info("🏗️ Built initial agent states")
-            
-            # Update agent states with new segment
-            self.agent_states.source = [segment]
-            self.agent_states.source_finished = False
-            self.agent_states.tgt_lang = self.target_lang
-            
-            # Process with the streaming agent
-            action = self.agent.policy(self.agent_states)
+            # Process with the streaming agent - SeamlessStreaming agents work differently
+            # They don't use persistent states like other SimulEval agents
+            try:
+                # Pass the segment directly to the agent policy
+                action = self.agent.policy(segment)
+            except Exception as policy_error:
+                logger.error(f"❌ Agent policy error: {policy_error}")
+                # Try alternative calling method
+                try:
+                    # Initialize states if needed
+                    if not hasattr(self, 'agent_states') or self.agent_states is None:
+                        self.agent_states = self.agent.build_states()
+                        logger.info(f"🏗️ Built agent states: {type(self.agent_states)}")
+                    
+                    # Handle list states (pipeline agents)
+                    if isinstance(self.agent_states, list):
+                        logger.info("📋 Using pipeline agent - passing segment directly")
+                        action = self.agent.policy(segment)
+                    else:
+                        # Single agent - update states
+                        self.agent_states.source = [segment]
+                        self.agent_states.source_finished = False
+                        if hasattr(self.agent_states, 'tgt_lang'):
+                            self.agent_states.tgt_lang = self.target_lang
+                        action = self.agent.policy(self.agent_states)
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback policy error: {fallback_error}")
+                    return None
             logger.info(f"🤖 Agent returned action: {type(action)}, finished: {getattr(action, 'finished', 'unknown')}")
             
             # Debug action details

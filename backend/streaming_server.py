@@ -153,6 +153,7 @@ class OfficialStreamingTranslator:
         args.no_early_stop = False  # Disable early stopping for streaming
         args.decision_threshold = 0.7  # Decision threshold for text decoder output
         args.decision_method = "threshold"  # Decision method for text decoder
+        args.block_ngrams = False  # Block repeated n-grams in text generation
         args.denormalize = False  # Whether to denormalize the output
         
         # Text generation parameters

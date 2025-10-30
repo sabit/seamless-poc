@@ -122,6 +122,7 @@ class OfficialStreamingTranslator:
         args.model_name = "seamless_streaming_unity"
         args.vocoder_name = "vocoder_pretssel" 
         args.unity_model_name = "seamless_streaming_unity"
+        args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
         
         # Device and precision configuration
         args.device = torch.device("cuda")
@@ -153,7 +154,8 @@ class OfficialStreamingTranslator:
         logger.info(f"🔧 Creating args for SeamlessStreaming agent:")
         logger.info(f"   📋 Task: {args.task}")
         logger.info(f"   🔧 Unity model: {args.unity_model_name}")
-        logger.info(f"   💾 Device: {args.device} (type: {args.device.type})")
+        logger.info(f"   � Monotonic decoder: {args.monotonic_decoder_model_name}")
+        logger.info(f"   �💾 Device: {args.device} (type: {args.device.type})")
         logger.info(f"   📊 Dtype: {args.dtype}")
         logger.info(f"   � FP16: {args.fp16}")
         logger.info(f"   �🔢 Min unit chunk size: {args.min_unit_chunk_size}")

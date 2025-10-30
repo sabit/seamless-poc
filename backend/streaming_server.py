@@ -148,7 +148,7 @@ class OfficialStreamingTranslator:
         args.target_language = tgt_lang  # Additional target language parameter
         
         # Streaming configuration parameters (optimized from research)
-        args.min_unit_chunk_size = 50  # Minimum number of units to accumulate
+        args.min_unit_chunk_size = 25  # REDUCED: Less accumulation required (was 50)
         args.source_segment_size = 320  # Critical: segment size from research
         args.d_factor = 1.0  # Duration factor for timing
         args.shift_size = 160  # Audio frame shift size
@@ -157,7 +157,7 @@ class OfficialStreamingTranslator:
         args.feature_dim = 80  # Feature dimension (e.g., mel-spectrogram features)
         args.min_starting_wait_w2vbert = 192  # FIXED: From research (was 1000)
         args.max_consecutive_write = 10  # Maximum consecutive writes for text decoder
-        args.min_starting_wait = 1000  # Minimum starting wait for text decoder
+        args.min_starting_wait = 192  # FIXED: Match w2vbert parameter (was 1000)
         args.no_early_stop = False  # Disable early stopping for streaming
         args.decision_threshold = 0.5  # FIXED: From research (was 0.7)
         args.decision_method = "threshold"  # Decision method for text decoder
@@ -277,14 +277,14 @@ class OfficialStreamingTranslator:
             logger.info(f"📈 Total accumulated samples: {self.total_samples}")
             
             # Determine if segment should be marked as finished
-            # TESTING: Force finishing to debug pipeline behavior
+            # More responsive finishing with updated parameters
             time_based_finish = (self.last_chunk_time and 
                                (current_time - self.last_chunk_time) > 1.0)
             sample_based_finish = self.total_samples >= 16384  # Finish at 1 second of audio
             chunk_based_finish = (self.total_samples >= 16384) and (self.total_samples % 16384 == 0)
-            # TEST: Force every segment to be finished to see if pipeline works at all
-            force_finish_test = True  # TEMPORARY: Always mark as finished for testing
-            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish or force_finish_test
+            # Force finish after accumulating enough for processing
+            force_finish = self.total_samples >= 24576  # 1.5 seconds of audio
+            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish or force_finish
             
             if segment_finished:
                 logger.info(f"🏁 Marking segment as finished (samples: {self.total_samples}, time_gap: {time_based_finish})")
@@ -325,6 +325,12 @@ class OfficialStreamingTranslator:
                             state.target_lang = self.target_lang
                         if hasattr(state, 'finished'):
                             state.finished = segment_finished
+                        
+                        # Debug: Check target/output state of each pipeline stage
+                        if hasattr(state, 'target') and state.target:
+                            logger.info(f"    State {i} has target output: {len(state.target)} items")
+                        if hasattr(state, 'source') and state.source:
+                            logger.info(f"    State {i} source length: {len(state.source)} items")
                     
                     # Get action from the pipeline
                     logger.info("🔄 Calling agent.policy()...")

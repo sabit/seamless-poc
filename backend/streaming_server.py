@@ -101,6 +101,10 @@ class OfficialStreamingTranslator:
         self.task = task
         self.args = None  # Store args for test access
         
+        # Audio accumulation for streaming
+        self.audio_accumulator = []
+        self.total_samples = 0
+        
         # Auto-initialize if requested (useful for testing)
         if auto_init:
             import asyncio
@@ -231,6 +235,12 @@ class OfficialStreamingTranslator:
             logger.error(f"📋 Traceback: {traceback.format_exc()}")
             return False
     
+    def reset_accumulator(self):
+        """Reset audio accumulator for new session"""
+        self.audio_accumulator = []
+        self.total_samples = 0
+        logger.info("🔄 Audio accumulator reset")
+    
     async def translate_stream(self, audio_chunk: bytes) -> Optional[bytes]:
         """Process audio chunk and return translated audio if available"""
         if not self.initialized or not self.agent:
@@ -247,69 +257,111 @@ class OfficialStreamingTranslator:
             # Convert to float32 and normalize
             audio_float = audio_np.astype(np.float32) / 32768.0
             
-            # Create speech segment for the agent
+            # Initialize agent states if this is the first chunk
+            if not hasattr(self, 'agent_states') or self.agent_states is None:
+                self.agent_states = self.agent.build_states()
+                logger.info(f"🏗️ Built agent states: {type(self.agent_states)}")
+                
+                # Initialize audio accumulator for streaming
+                self.audio_accumulator = []
+                self.total_samples = 0
+            
+            # Accumulate audio samples for streaming processing
+            self.audio_accumulator.extend(audio_float)
+            self.total_samples += len(audio_float)
+            
+            logger.info(f"📈 Total accumulated samples: {self.total_samples}")
+            
+            # Create speech segment with accumulated audio
             segment = SpeechSegment(
-                content=audio_float,
+                content=np.array(self.audio_accumulator, dtype=np.float32),
                 sample_rate=16000,
-                finished=False
+                finished=False  # Keep streaming
             )
             
-            logger.info(f"🎤 Created speech segment with {len(audio_float)} samples")
+            logger.info(f"🎤 Created speech segment with {len(self.audio_accumulator)} samples")
             
-            # Process with the streaming agent - SeamlessStreaming agents work differently
-            # They don't use persistent states like other SimulEval agents
+            # Process with the streaming agent
             try:
-                # Pass the segment directly to the agent policy
-                action = self.agent.policy(segment)
+                # Handle list states (pipeline agents)
+                if isinstance(self.agent_states, list):
+                    logger.info("📋 Using pipeline agent approach")
+                    # For pipeline agents, update each state in the list
+                    for i, state in enumerate(self.agent_states):
+                        if hasattr(state, 'source'):
+                            state.source = [segment]
+                            state.source_finished = False
+                        if hasattr(state, 'tgt_lang'):
+                            state.tgt_lang = self.target_lang
+                    
+                    # Get action from the pipeline
+                    action = self.agent.policy(self.agent_states)
+                else:
+                    logger.info("🔧 Using single agent approach")
+                    # Single agent - update states
+                    self.agent_states.source = [segment]
+                    self.agent_states.source_finished = False
+                    if hasattr(self.agent_states, 'tgt_lang'):
+                        self.agent_states.tgt_lang = self.target_lang
+                    
+                    action = self.agent.policy(self.agent_states)
+                
+                logger.info(f"🤖 Agent returned action: {type(action)}")
+                
+                # Handle None actions (normal during accumulation phase)
+                if action is None:
+                    logger.info("⏳ Agent still accumulating audio - no translation yet")
+                    return None
+                
+                # Debug action details
+                if hasattr(action, '__dict__'):
+                    logger.info(f"🔍 Action attributes: {list(action.__dict__.keys())}")
+                
+                # Check if action is a ReadAction (needs more input)
+                if hasattr(action, '__class__') and 'Read' in action.__class__.__name__:
+                    logger.info("📖 Agent requesting more input (ReadAction)")
+                    return None
+                
+                # Check for WriteAction with content
+                if hasattr(action, 'content') and action.content is not None:
+                    logger.info(f"✍️ Agent produced content: {type(action.content)}")
+                    
+                    # For s2st, action.content should be audio samples
+                    if isinstance(action.content, (list, np.ndarray)):
+                        # Convert audio samples to int16 PCM bytes
+                        if isinstance(action.content, list):
+                            audio_samples = np.array(action.content, dtype=np.float32)
+                        else:
+                            audio_samples = action.content.astype(np.float32)
+                        
+                        # Normalize and convert to int16
+                        audio_samples = np.clip(audio_samples, -1.0, 1.0)
+                        audio_int16 = (audio_samples * 32767).astype(np.int16)
+                        
+                        logger.info(f"🔊 Generated audio translation: {len(audio_int16)} samples")
+                        
+                        # Clear accumulator after successful translation
+                        self.audio_accumulator = []
+                        self.total_samples = 0
+                        
+                        return audio_int16.tobytes()
+                    else:
+                        logger.warning(f"⚠️ Unexpected audio content type: {type(action.content)}")
+                
+                # Check for text content (in case of s2t mode)
+                if hasattr(action, 'content') and isinstance(action.content, str):
+                    logger.info(f"📝 Agent produced text: {action.content}")
+                    # For now, we don't return text in s2st mode
+                    return None
+                
+                logger.info("🔍 Action has no usable content")
+                return None
+                
             except Exception as policy_error:
                 logger.error(f"❌ Agent policy error: {policy_error}")
-                # Try alternative calling method
-                try:
-                    # Initialize states if needed
-                    if not hasattr(self, 'agent_states') or self.agent_states is None:
-                        self.agent_states = self.agent.build_states()
-                        logger.info(f"🏗️ Built agent states: {type(self.agent_states)}")
-                    
-                    # Handle list states (pipeline agents)
-                    if isinstance(self.agent_states, list):
-                        logger.info("📋 Using pipeline agent - passing segment directly")
-                        action = self.agent.policy(segment)
-                    else:
-                        # Single agent - update states
-                        self.agent_states.source = [segment]
-                        self.agent_states.source_finished = False
-                        if hasattr(self.agent_states, 'tgt_lang'):
-                            self.agent_states.tgt_lang = self.target_lang
-                        action = self.agent.policy(self.agent_states)
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback policy error: {fallback_error}")
-                    return None
-            logger.info(f"🤖 Agent returned action: {type(action)}, finished: {getattr(action, 'finished', 'unknown')}")
-            
-            # Debug action details
-            if hasattr(action, '__dict__'):
-                logger.info(f"🔍 Action attributes: {list(action.__dict__.keys())}")
-            
-            # Check if we have audio translation output
-            if hasattr(action, 'content') and action.content is not None:
-                # For s2st, action.content should be audio samples
-                if isinstance(action.content, (list, np.ndarray)):
-                    # Convert audio samples to int16 PCM bytes
-                    if isinstance(action.content, list):
-                        audio_samples = np.array(action.content, dtype=np.float32)
-                    else:
-                        audio_samples = action.content.astype(np.float32)
-                    
-                    # Normalize and convert to int16
-                    audio_samples = np.clip(audio_samples, -1.0, 1.0)
-                    audio_int16 = (audio_samples * 32767).astype(np.int16)
-                    
-                    logger.info(f"� Generated audio translation: {len(audio_int16)} samples")
-                    return audio_int16.tobytes()
-                else:
-                    logger.warning(f"⚠️ Unexpected audio content type: {type(action.content)}")
-                
-            return None
+                import traceback
+                logger.error(f"📋 Policy traceback: {traceback.format_exc()}")
+                return None
             
         except Exception as e:
             logger.error(f"❌ Translation error: {e}")
@@ -343,6 +395,8 @@ class StreamingSession:
         success = await self.official_translator.initialize(task, src_lang, tgt_lang)
         
         if success:
+            # Reset accumulator for new session
+            self.official_translator.reset_accumulator()
             self.is_active = True
             logger.info(f"✅ Session {self.session_id} ready with official SeamlessStreaming")
             return True
@@ -551,8 +605,8 @@ if __name__ == "__main__":
         )
     else:
         logger.info("🌐 Starting server without SSL")
-        logger.info("🌐 HTTP: http://localhost:8000")
-        logger.info("🔌 WS: ws://localhost:8000/ws/stream")
+        logger.info("🌐 HTTP: http://localhost:7860")
+        logger.info("🔌 WS: ws://localhost:7860/ws/stream")
         
         uvicorn.run(
             app, 

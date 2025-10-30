@@ -26,6 +26,12 @@ app = FastAPI(title="SeamlessStreaming Translation API")
 # Serve static frontend files
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
+# Language code mapping
+LANGUAGE_MAPPING = {
+    "en": "eng",  # English
+    "bn": "ben",  # Bangla
+}
+
 class SeamlessTranslator:
     def __init__(self):
         self.model = None
@@ -124,6 +130,25 @@ class SeamlessTranslator:
             logger.error(f"Raw PCM processing failed: {e}")
             return None
     
+    def tensor_to_pcm_bytes(self, tensor: torch.Tensor, sample_rate: int = 16000):
+        """Convert tensor to raw PCM bytes (like echo server)"""
+        try:
+            # Ensure tensor is on CPU and convert to numpy
+            audio_np = tensor.detach().cpu().numpy()
+            
+            # Normalize audio to prevent clipping
+            if audio_np.max() > 1.0 or audio_np.min() < -1.0:
+                audio_np = audio_np / max(abs(audio_np.max()), abs(audio_np.min()))
+            
+            # Convert to 16-bit PCM (same as echo server output)
+            audio_16bit = (audio_np * 32767).astype(np.int16)
+            
+            return audio_16bit.tobytes()
+                
+        except Exception as e:
+            logger.error(f"Error converting tensor to PCM bytes: {e}")
+            return None
+
     def tensor_to_audio_bytes(self, tensor: torch.Tensor, sample_rate: int = 16000):
         """Convert tensor to audio bytes"""
         try:
@@ -151,15 +176,12 @@ class SeamlessTranslator:
             logger.error(f"Error converting tensor to audio bytes: {e}")
             return None
     
-    async def translate_speech(self, audio_bytes: bytes, src_lang: str, tgt_lang: str, sample_rate: int = 16000):
-        """Translate speech from source to target language"""
+    async def translate_speech_tensor(self, waveform: torch.Tensor, src_lang: str, tgt_lang: str, sample_rate: int = 16000):
+        """Translate speech from tensor input - optimized for real-time processing"""
         try:
-            # Convert audio bytes to tensor
-            waveform = self.audio_bytes_to_tensor(audio_bytes, sample_rate)
-            if waveform is None:
-                return None
+            logger.info(f"Translating tensor: {waveform.shape} samples, {src_lang} -> {tgt_lang}")
             
-            # Process audio with the model (fixed deprecated parameter and added sampling_rate)
+            # Process audio with the model
             inputs = self.processor(
                 audio=waveform,
                 sampling_rate=sample_rate,
@@ -175,13 +197,28 @@ class SeamlessTranslator:
                     generate_speech=True
                 )
             
-            # Convert output to audio bytes
+            # Convert output to PCM bytes (like echo server)
             if hasattr(outputs, 'waveform') and outputs.waveform is not None:
-                return self.tensor_to_audio_bytes(outputs.waveform.squeeze())
+                return self.tensor_to_pcm_bytes(outputs.waveform.squeeze())
             elif 'waveform' in outputs:
-                return self.tensor_to_audio_bytes(outputs['waveform'].squeeze())
+                return self.tensor_to_pcm_bytes(outputs['waveform'].squeeze())
             
+            logger.warning("No waveform output from model")
             return None
+            
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            return None
+    
+    async def translate_speech(self, audio_bytes: bytes, src_lang: str, tgt_lang: str, sample_rate: int = 16000):
+        """Translate speech from source to target language"""
+        try:
+            # Convert audio bytes to tensor
+            waveform = self.audio_bytes_to_tensor(audio_bytes, sample_rate)
+            if waveform is None:
+                return None
+            
+            return await self.translate_speech_tensor(waveform, src_lang, tgt_lang, sample_rate)
             
         except Exception as e:
             logger.error(f"Translation error: {e}")
@@ -220,6 +257,81 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "model_loaded": translator.model is not None}
+
+@app.websocket("/ws/translate")
+async def websocket_translate(websocket: WebSocket):
+    """WebSocket endpoint for real-time speech translation - browser compatible"""
+    await websocket.accept()
+    
+    try:
+        # 1) Wait for start control message
+        start_msg = await websocket.receive_text()
+        config = json.loads(start_msg)
+        
+        if config.get("type") != "start":
+            await websocket.send_text('{"type":"error","msg":"expected start message"}')
+            await websocket.close()
+            return
+        
+        # Parse session config
+        src_lang = LANGUAGE_MAPPING.get(config.get('src_lang', 'en'), 'eng')
+        tgt_lang = LANGUAGE_MAPPING.get(config.get('tgt_lang', 'bn'), 'ben')
+        sample_rate = int(config.get('sample_rate', 16000))
+        
+        logger.info(f"Started session: {src_lang} -> {tgt_lang} at {sample_rate}Hz")
+        
+        # Send ready confirmation
+        await websocket.send_text('{"type":"ready"}')
+        
+        # Process audio chunks in real-time
+        while True:
+            message = await websocket.receive()
+            
+            if "bytes" in message:
+                # Handle browser audio data (WebM/WAV format)
+                audio_bytes = message["bytes"]
+                logger.info(f"Received audio: {len(audio_bytes)} bytes, format signature: {audio_bytes[:12]}")
+                
+                # Convert audio bytes to tensor using our robust format detection
+                waveform = translator.audio_bytes_to_tensor(audio_bytes, sample_rate)
+                
+                if waveform is not None:
+                    # Translate speech
+                    try:
+                        translated_audio = await translator.translate_speech_tensor(waveform, src_lang, tgt_lang, sample_rate)
+                        
+                        if translated_audio is not None:
+                            # Send back as PCM bytes 
+                            await websocket.send_bytes(translated_audio)
+                            logger.info(f"Sent translated audio: {len(translated_audio)} bytes")
+                        else:
+                            logger.warning("Translation returned None")
+                            
+                    except Exception as e:
+                        logger.error(f"Translation error: {e}")
+                else:
+                    logger.error("Failed to convert audio bytes to tensor")
+                    
+            elif "text" in message:
+                # Handle control messages
+                try:
+                    ctrl = json.loads(message["text"])
+                    if ctrl.get("type") == "stop":
+                        break
+                except Exception:
+                    pass
+        
+        # Send end message
+        await websocket.send_text('{"type":"end","reason":"completed"}')
+        
+    except WebSocketDisconnect:
+        logger.info("Client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            await websocket.send_text(f'{{"type":"error","msg":"{str(e)}"}}')
+        except:
+            pass
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):

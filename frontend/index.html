@@ -364,11 +364,14 @@
                         src_lang: this.sourceLanguage.value,
                         tgt_lang: this.targetLanguage.value,
                         sample_rate: 16000,
-                        chunk_size: 1024
+                        chunk_size: 4096
                     };
                     
                     console.log('📤 Sending start message:', startMessage);
                     this.websocket.send(JSON.stringify(startMessage));
+                    
+                    // Update connection status immediately
+                    this.updateConnectionStatus('connected');
                 };
                 
                 this.websocket.onmessage = (event) => {
@@ -399,7 +402,7 @@
                         }
                     } else {
                         // Handle binary audio data (raw PCM)
-                        console.log('🎵 Binary audio data received for playback');
+                        console.log('🎵 Binary audio data received for playback, size:', event.data.byteLength || event.data.size);
                         this.playTranslatedAudio(event.data);
                     }
                 };
@@ -595,6 +598,24 @@
             
             async toggleStreaming() {
                 if (!this.isStreaming) {
+                    // Ensure WebSocket is connected before starting streaming
+                    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+                        this.updateStatus('Connecting to server...', 'info');
+                        this.connectWebSocket();
+                        
+                        // Wait for connection or timeout
+                        let attempts = 0;
+                        while ((!this.websocket || this.websocket.readyState !== WebSocket.OPEN) && attempts < 50) {
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            attempts++;
+                        }
+                        
+                        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+                            this.updateStatus('Failed to connect to server', 'error');
+                            return;
+                        }
+                    }
+                    
                     await this.startStreaming();
                 } else {
                     this.stopStreaming();
@@ -605,48 +626,69 @@
                 try {
                     console.log('🌊 Starting continuous streaming...');
                     
-                    // Get microphone access
+                    // Set streaming flag first
+                    this.isStreaming = true;
+                    this.updateUIForStreaming(true);
+                    
+                    // Get microphone access with specific constraints
                     this.audioStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             sampleRate: 16000,
                             channelCount: 1,
                             echoCancellation: true,
                             noiseSuppression: true,
-                            autoGainControl: false
+                            autoGainControl: true
                         }
                     });
                     
                     console.log('✅ Microphone access granted for streaming');
+                    console.log('🎤 Audio stream tracks:', this.audioStream.getTracks().length);
                     
-                    // Create AudioContext for processing
+                    // Create AudioContext for processing - use browser's native sample rate
                     if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 16000
-                        });
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        console.log('🎵 AudioContext created with sample rate:', this.audioContext.sampleRate);
                     }
                     
                     if (this.audioContext.state === 'suspended') {
                         await this.audioContext.resume();
+                        console.log('▶️ AudioContext resumed');
                     }
                     
                     // Create MediaStreamAudioSourceNode
                     const source = this.audioContext.createMediaStreamSource(this.audioStream);
+                    console.log('🎙️ Audio source node created');
                     
-                    // Create ScriptProcessorNode for audio processing (fallback for older browsers)
-                    const processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                    // Create ScriptProcessorNode for audio processing
+                    const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+                    console.log('🔄 Script processor created with buffer size: 4096');
                     
+                    let chunkCount = 0;
                     processor.onaudioprocess = (event) => {
-                        if (this.isStreaming && this.websocket.readyState === WebSocket.OPEN) {
+                        if (this.isStreaming && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                             const inputData = event.inputBuffer.getChannelData(0);
                             
-                            // Convert float32 to int16
-                            const int16Data = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
-                                int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
-                            }
+                            // Check audio level to avoid sending silence
+                            const rms = Math.sqrt(inputData.reduce((sum, sample) => sum + sample * sample, 0) / inputData.length);
                             
-                            // Send audio chunk to server
-                            this.websocket.send(int16Data.buffer);
+                            if (rms > 0.01) { // Only send if there's actual audio
+                                // Convert float32 to int16
+                                const int16Data = new Int16Array(inputData.length);
+                                for (let i = 0; i < inputData.length; i++) {
+                                    int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
+                                }
+                                
+                                // Send audio chunk to server
+                                try {
+                                    this.websocket.send(int16Data.buffer);
+                                    chunkCount++;
+                                    if (chunkCount % 50 === 0) { // Log every 50 chunks
+                                        console.log(`📤 Sent ${chunkCount} audio chunks, RMS: ${rms.toFixed(4)}`);
+                                    }
+                                } catch (error) {
+                                    console.error('❌ Error sending audio chunk:', error);
+                                }
+                            }
                         }
                     };
                     
@@ -655,8 +697,6 @@
                     processor.connect(this.audioContext.destination);
                     
                     this.streamingProcessor = processor;
-                    this.isStreaming = true;
-                    this.updateUIForStreaming(true);
                     
                     console.log('🌊 Streaming started successfully');
                     this.updateStatus('🌊 Streaming... Speak continuously!', 'info');

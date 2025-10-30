@@ -260,7 +260,7 @@ class StreamingSession:
             # Log audio characteristics for debugging
             audio_rms = np.sqrt(np.mean(audio_np ** 2))
             audio_max = np.max(np.abs(audio_np))
-            logger.debug(f"Audio chunk: {len(audio_np)} samples, RMS: {audio_rms:.4f}, Max: {audio_max:.4f}")
+            logger.info(f"Audio chunk received: {len(audio_np)} samples, RMS: {audio_rms:.4f}, Max: {audio_max:.4f}")
             
             # Add to streaming buffer
             self.add_audio_chunk(audio_np)
@@ -367,9 +367,12 @@ async def websocket_streaming_translate(websocket: WebSocket):
             if "bytes" in message:
                 # Process streaming audio chunk
                 audio_chunk = message["bytes"]
+                logger.info(f"Received audio chunk: {len(audio_chunk)} bytes")
                 
                 if len(audio_chunk) > 0:
                     await session.process_audio_chunk(audio_chunk)
+                else:
+                    logger.warning("Received empty audio chunk")
                     
             elif "text" in message:
                 # Handle control messages

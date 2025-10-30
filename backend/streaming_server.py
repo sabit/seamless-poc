@@ -148,19 +148,19 @@ class OfficialStreamingTranslator:
         args.lang_pairs = f"{src_lang}-{tgt_lang}"  # Language pair specification
         args.target_language = tgt_lang  # Additional target language parameter
         
-        # Streaming configuration parameters (optimized from research)
-        args.min_unit_chunk_size = 25  # REDUCED: Less accumulation required (was 50)
-        args.source_segment_size = 320  # Critical: segment size from research
+        # Streaming configuration parameters - TRYING DIFFERENT VALUES
+        args.min_unit_chunk_size = 10   # VERY SMALL: Force more frequent decisions
+        args.source_segment_size = 160   # SMALLER: Half the research value
         args.d_factor = 1.0  # Duration factor for timing
-        args.shift_size = 160  # Audio frame shift size
-        args.segment_size = 2000  # Audio segment size
-        args.window_size = 2000  # Feature extraction window size
+        args.shift_size = 80   # SMALLER: Half the frame shift
+        args.segment_size = 1000  # SMALLER: Audio segment size
+        args.window_size = 1000  # SMALLER: Feature extraction window
         args.feature_dim = 80  # Feature dimension (e.g., mel-spectrogram features)
-        args.min_starting_wait_w2vbert = 192  # FIXED: From research (was 1000)
-        args.max_consecutive_write = 10  # Maximum consecutive writes for text decoder
-        args.min_starting_wait = 192  # FIXED: Match w2vbert parameter (was 1000)
+        args.min_starting_wait_w2vbert = 96   # HALF: Try smaller wait time
+        args.max_consecutive_write = 5   # SMALLER: Force more frequent writes
+        args.min_starting_wait = 96   # HALF: Match w2vbert parameter
         args.no_early_stop = False  # Disable early stopping for streaming
-        args.decision_threshold = 0.5  # FIXED: From research (was 0.7)
+        args.decision_threshold = 0.3  # LOWER: Make decisions easier
         args.decision_method = "threshold"  # Decision method for text decoder
         args.block_ngrams = False  # Block repeated n-grams in text generation
         args.p_choose_start_layer = 0  # Layer to start choosing from in decoder
@@ -233,6 +233,12 @@ class OfficialStreamingTranslator:
                 self.agent_states = self.agent.build_states()
                 logger.info(f"🏗️ First chunk - built states: {type(self.agent_states)}")
                 
+                # DEBUG: Log state structure for troubleshooting
+                if isinstance(self.agent_states, list):
+                    logger.info(f"🔍 Pipeline with {len(self.agent_states)} states")
+                else:
+                    logger.info(f"🔍 Single agent state: {type(self.agent_states).__name__}")
+                
                 # Initialize audio accumulator for streaming
                 self.audio_accumulator = []
                 self.total_samples = 0
@@ -242,12 +248,14 @@ class OfficialStreamingTranslator:
             self.total_samples += len(audio_float)
             current_time = time.time()
             
-            # Determine if segment should be marked as finished
+            # Determine if segment should be marked as finished - MORE AGGRESSIVE
             time_based_finish = (self.last_chunk_time and 
-                               (current_time - self.last_chunk_time) > 1.0)
-            sample_based_finish = self.total_samples >= 16384  # Finish at 1 second of audio
-            force_finish = self.total_samples >= 24576  # 1.5 seconds of audio
-            segment_finished = time_based_finish or sample_based_finish or force_finish
+                               (current_time - self.last_chunk_time) > 0.5)
+            sample_based_finish = self.total_samples >= 8000   # Finish at 0.5 second of audio
+            force_finish = self.total_samples >= 12000  # 0.75 seconds of audio
+            # CRITICAL: Force finish every chunk after minimum threshold
+            frequent_finish = self.total_samples >= 4000  # Very aggressive - 0.25s
+            segment_finished = time_based_finish or sample_based_finish or force_finish or frequent_finish
             
             # Create speech segment with accumulated audio
             segment = SpeechSegment(
@@ -263,7 +271,7 @@ class OfficialStreamingTranslator:
                 # Update states with current segment
                 if isinstance(self.agent_states, list):
                     # Pipeline agents - update each state
-                    for state in enumerate(self.agent_states):
+                    for i, state in enumerate(self.agent_states):  # FIXED: was using enumerate wrong
                         if hasattr(state, 'source'):
                             state.source = [segment]
                             state.source_finished = segment_finished
@@ -273,6 +281,11 @@ class OfficialStreamingTranslator:
                             state.target_lang = self.target_lang
                         if hasattr(state, 'finished'):
                             state.finished = segment_finished
+                        
+                        # DEBUG: Log state updates for first few segments
+                        if self.total_samples < 50000:
+                            logger.info(f"🔧 Updated state {i}: source={len(state.source) if hasattr(state, 'source') and state.source else 0}, finished={segment_finished}")
+                    
                     action = self.agent.policy(self.agent_states)
                 else:
                     # Single agent
@@ -290,7 +303,23 @@ class OfficialStreamingTranslator:
                 if action is None:
                     if segment_finished:
                         logger.warning(f"❌ PROBLEM: Segment FINISHED ({self.total_samples} samples) but agent returned None!")
-                        logger.warning(f"   Parameters: min_wait={getattr(self.args, 'min_starting_wait_w2vbert', 'unknown')}, threshold={getattr(self.args, 'decision_threshold', 'unknown')}")
+                        logger.warning(f"   Pipeline states: {len(self.agent_states) if isinstance(self.agent_states, list) else 'single'}")
+                        
+                        # DEBUG: Check pipeline state details for first few failures
+                        if self.total_samples < 100000 and isinstance(self.agent_states, list):
+                            for i, state in enumerate(self.agent_states):
+                                logger.warning(f"   State {i}: {type(state).__name__}")
+                                if hasattr(state, 'source') and state.source:
+                                    logger.warning(f"     source: {len(state.source)} segments")
+                                if hasattr(state, 'target') and state.target:
+                                    logger.warning(f"     target: {len(state.target)} outputs")
+                        
+                        # CRITICAL FIX: Reset states and try again after failed finished segment
+                        logger.warning("🔄 RESETTING agent states due to failed finished segment")
+                        self.agent_states = self.agent.build_states()
+                        # Clear accumulator to start fresh
+                        self.audio_accumulator = []
+                        self.total_samples = 0
                     return None
                 
                 # FOCUS: Log successful translation only

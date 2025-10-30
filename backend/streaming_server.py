@@ -326,48 +326,39 @@ class OfficialStreamingTranslator:
                 if segment_finished and len(audio_array) >= 4000:  # Only log on large finished segments
                     logger.info(f"🔍 AGENT DEBUG: type={type(self.agent)}, methods={[m for m in dir(self.agent) if not m.startswith('_') and callable(getattr(self.agent, m, None))][:10]}")
                 
-                # SIMULEVAL EVALUATOR APPROACH: Use official evaluation framework
-                # Based on research: SeamlessStreaming requires SimulEval Evaluator for proper coordination
+                # PUSH/POP STREAMING APPROACH: Use proper streaming methods
+                # Based on agent debug: agent has push, pop, pushpop methods for streaming
                 action = None
                 
                 try:
-                    # Method 1: Use official SimulEval Evaluator pattern
-                    from simuleval.evaluator.evaluator import build_evaluator
-                    from simuleval.data.segments import Segment
+                    # PUSH: Feed audio segment to agent for processing
+                    logger.info(f"🔼 PUSH: {len(audio_array)} samples, finished={segment_finished}")
+                    push_result = self.agent.push(speech_segment)
+                    logger.info(f"🔼 Push result: {type(push_result)} = {push_result}")
                     
-                    # Create a minimal evaluation instance for this segment
-                    source_segments = [speech_segment]
+                    # POP: Try to get translation output
+                    logger.info("🔽 POP: Attempting to retrieve translation")
+                    pop_result = self.agent.pop()
+                    logger.info(f"🔽 Pop result: {type(pop_result)} = {pop_result}")
                     
-                    # Try to evaluate using the official evaluator approach
-                    if not hasattr(self, '_evaluator'):
-                        # Build evaluator for this agent if not exists
-                        self._evaluator = build_evaluator(None)  # Use default config
-                        
-                    # Process the segment through proper evaluation
-                    results = self._evaluator.evaluate(
-                        agent=self.agent,
-                        source_segments=source_segments,
-                        target_segments=[],  # No reference for streaming
-                        output_dir=None
-                    )
-                    
-                    if results and len(results) > 0:
-                        # Extract action from evaluation results
-                        action = results[-1] if results else None
-                        logger.info(f"🔧 SimulEval Evaluator produced result")
+                    if pop_result is not None:
+                        action = pop_result
+                        logger.info(f"✅ POP SUCCESS: Got result from pop()")
                     else:
-                        action = None
-                        logger.info(f"🔧 SimulEval Evaluator returned empty")
+                        # If no pop result, try pushpop method (combined operation)
+                        logger.info("🔄 PUSHPOP: Trying combined push+pop method")
+                        pushpop_result = self.agent.pushpop(speech_segment)
+                        logger.info(f"� Pushpop result: {type(pushpop_result)} = {pushpop_result}")
                         
-                except ImportError as import_error:
-                    logger.warning(f"⚠️ SimulEval Evaluator not available: {import_error}")
-                    action = None
+                        if pushpop_result is not None:
+                            action = pushpop_result
+                            logger.info(f"✅ PUSHPOP SUCCESS: Got result from pushpop()")
                     
-                except Exception as eval_error:
-                    logger.warning(f"⚠️ SimulEval Evaluator failed: {eval_error}")
+                except Exception as streaming_error:
+                    logger.error(f"❌ Push/Pop streaming error: {streaming_error}")
                     action = None
                 
-                # Method 2: Try simple agent processing
+                # FALLBACK: Try simple agent processing if push/pop didn't work
                 if action is None:
                     try:
                         # Update agent state with audio segment

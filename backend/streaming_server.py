@@ -128,14 +128,14 @@ class OfficialStreamingTranslator:
             raise
     
     def _create_official_args(self):
-        """Create Args object based on official SeamlessStreaming source code"""
+        """Create Args object based on official SeamlessStreaming source code analysis"""
         from argparse import Namespace
         import torch
         
         # Create args matching the official implementation patterns
         args = Namespace()
         
-        # === Core UnitYPipelineMixin parameters ===
+        # === Core UnitYPipelineMixin parameters (required by all agents) ===
         args.task = "s2st"  # Speech-to-Speech Translation
         args.unity_model_name = "seamless_streaming_unity"
         args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
@@ -144,56 +144,64 @@ class OfficialStreamingTranslator:
         args.device = "cuda"
         args.fp16 = True
         
-        # === Individual Agent Parameters (from add_args methods) ===
+        # === Agent-Specific Parameters (from source code add_args methods) ===
         
-        # OnlineFeatureExtractorAgent parameters
+        # OnlineFeatureExtractorAgent.add_args()
         args.upstream_idx = 0
         args.feature_dim = 1024
         args.frame_num = 1
         
-        # OfflineWav2VecBertEncoderAgent parameters  
+        # OfflineWav2VecBertEncoderAgent.add_args()
         args.encoder_chunk_size = 480
         
-        # UnitYMMATextDecoderAgent parameters
+        # UnitYMMATextDecoderAgent.add_args()
         args.min_starting_wait_w2vbert = 16
         args.min_starting_wait_mma = 4
         
-        # NARUnitYUnitDecoderAgent parameters (CRITICAL - these were missing!)
-        args.min_unit_chunk_size = 50  # Required parameter
-        args.d_factor = 1.0  # Required parameter
+        # NARUnitYUnitDecoderAgent.add_args() - CRITICAL MISSING PARAMETERS!
+        args.min_unit_chunk_size = 50  # Required by NARUnitYUnitDecoderAgent
+        args.d_factor = 1.0  # Required by NARUnitYUnitDecoderAgent
         
-        # VocoderAgent parameters
+        # VocoderAgent.add_args()
         args.vocoder_name = "vocoder_v2"
         
-        # === SimulEval Framework Parameters ===
+        # === SimulEval Framework Base Parameters ===
         args.source_segment_size = 480
         args.target_segment_size = None
         args.waitk_lagging = 3
         args.quality_metrics = "BLEU"
         args.latency_metrics = "StartOffset EndOffset"
         
-        # === Device and Type Conversion ===
-        args.device = torch.device(args.device)
-        if args.dtype == "fp16" and args.device.type != "cpu":
-            args.dtype = torch.float16
-        else:
-            args.dtype = torch.float32
-        
         # === Additional Framework Parameters ===
         args.output = None
         args.config = None
         args.no_gpu = False
+        args.model_name = args.unity_model_name  # Some agents expect this
         
         # === Language Configuration ===
         args.source_lang = self.source_lang
         args.target_lang = self.target_lang
         
-        logger.info("📝 Created official Args object with all required agent parameters")
-        logger.info(f"   - Task: {args.task}")
-        logger.info(f"   - Unity model: {args.unity_model_name}")
-        logger.info(f"   - Device: {args.device}")
-        logger.info(f"   - Min unit chunk size: {args.min_unit_chunk_size}")
-        logger.info(f"   - Duration factor: {args.d_factor}")
+        # === Device and Type Processing (must be done after all string assignments) ===
+        # Convert string device to torch.device
+        device_str = args.device
+        args.device = torch.device(device_str)
+        
+        # Convert string dtype to torch dtype
+        if args.dtype == "fp16" and args.device.type != "cpu":
+            args.dtype = torch.float16
+        else:
+            args.dtype = torch.float32
+        
+        # === Debug Information ===
+        logger.info("📝 Created comprehensive Args object based on source code analysis:")
+        logger.info(f"   🎯 Task: {args.task}")
+        logger.info(f"   🔧 Unity model: {args.unity_model_name}")
+        logger.info(f"   💾 Device: {args.device} (type: {args.device.type})")
+        logger.info(f"   📊 Dtype: {args.dtype}")
+        logger.info(f"   🔢 Min unit chunk size: {args.min_unit_chunk_size}")
+        logger.info(f"   ⏱️  Duration factor: {args.d_factor}")
+        logger.info(f"   🗣️  Languages: {args.source_lang} → {args.target_lang}")
         
         return args
         

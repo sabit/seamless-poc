@@ -11,7 +11,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
-from transformers import SeamlessM4Tv2ForSpeechToSpeech, SeamlessM4TProcessor
+from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
+from transformers.models.seamless_m4t.processing_seamless_m4t import SeamlessM4TProcessor
 import io
 import wave
 import tempfile

@@ -370,18 +370,32 @@
                         }
                     });
                     
-                    const options = {
-                        mimeType: 'audio/webm;codecs=opus',
-                        audioBitsPerSecond: 16000
-                    };
+                    // Use Web Audio API to get raw PCM data instead of MediaRecorder
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 16000
+                    });
                     
-                    this.mediaRecorder = new MediaRecorder(this.audioStream, options);
+                    const source = this.audioContext.createMediaStreamSource(this.audioStream);
                     
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0 && this.websocket.readyState === WebSocket.OPEN) {
-                            this.sendAudioData(event.data);
+                    // Create ScriptProcessorNode for raw audio data
+                    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+                    this.processor.onaudioprocess = (event) => {
+                        if (this.isRecording && this.websocket.readyState === WebSocket.OPEN) {
+                            const inputBuffer = event.inputBuffer;
+                            const inputData = inputBuffer.getChannelData(0); // Get mono channel
+                            
+                            // Convert float32 to int16 PCM
+                            const pcmData = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                            }
+                            
+                            this.sendRawAudioData(pcmData.buffer);
                         }
                     };
+                    
+                    source.connect(this.processor);
+                    this.processor.connect(this.audioContext.destination);
                     
                     this.mediaRecorder.start(1000); // Collect data every 1 second
                     this.isRecording = true;
@@ -399,9 +413,16 @@
             }
             
             stopRecording() {
-                if (this.mediaRecorder && this.isRecording) {
-                    this.mediaRecorder.stop();
-                    this.isRecording = false;
+                this.isRecording = false;
+                
+                if (this.processor) {
+                    this.processor.disconnect();
+                    this.processor = null;
+                }
+                
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
                 }
                 
                 if (this.audioStream) {
@@ -414,6 +435,31 @@
                 this.recordBtn.classList.remove('recording');
                 
                 this.updateStatus('Recording stopped. Click "Start Recording" to continue.', 'info');
+            }
+            
+            sendRawAudioData(audioBuffer) {
+                try {
+                    // Create header
+                    const header = {
+                        src_lang: this.sourceLanguage.value,
+                        tgt_lang: this.targetLanguage.value
+                    };
+                    
+                    const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+                    const headerLengthBytes = new Uint8Array(4);
+                    const dataView = new DataView(headerLengthBytes.buffer);
+                    dataView.setUint32(0, headerBytes.length, true);
+                    
+                    // Combine header length + header + raw PCM audio data
+                    const message = new Uint8Array(4 + headerBytes.length + audioBuffer.byteLength);
+                    message.set(headerLengthBytes, 0);
+                    message.set(headerBytes, 4);
+                    message.set(new Uint8Array(audioBuffer), 4 + headerBytes.length);
+                    
+                    this.websocket.send(message);
+                } catch (error) {
+                    console.error('Error sending raw audio data:', error);
+                }
             }
             
             async sendAudioData(audioBlob) {

@@ -50,22 +50,29 @@ class SeamlessTranslator:
             raise e
     
     def audio_bytes_to_tensor(self, audio_bytes: bytes, sample_rate: int = 16000):
-        """Convert audio bytes to tensor for model input"""
+        """Convert raw PCM audio bytes to tensor for model input"""
         try:
-            # The audio bytes are raw PCM data from WebRTC (16-bit signed integers)
-            # Convert directly to numpy array without creating temp file
+            logger.info(f"Processing {len(audio_bytes)} bytes of raw PCM audio data")
             
-            # Convert bytes to numpy array (assuming 16-bit signed PCM)
+            # Handle potential padding issues
+            if len(audio_bytes) % 2 != 0:
+                # Pad with zero byte to make it even for int16 conversion
+                audio_bytes = audio_bytes + b'\x00'
+                logger.info(f"Padded audio to {len(audio_bytes)} bytes")
+            
+            # Convert bytes to numpy array (16-bit signed PCM from frontend)
             audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
             
             # Convert from int16 to float32 and normalize to [-1, 1]
             waveform = audio_np.astype(np.float32) / 32768.0
             
+            logger.info(f"Converted to waveform: {len(waveform)} samples, range: [{waveform.min():.3f}, {waveform.max():.3f}]")
+            
             # Convert numpy array to torch tensor
             return torch.from_numpy(waveform).float()
                 
         except Exception as e:
-            logger.error(f"Error processing audio bytes: {e}")
+            logger.error(f"Error processing raw PCM audio bytes: {e}")
             logger.error(f"Audio bytes length: {len(audio_bytes)}, first few bytes: {audio_bytes[:20]}")
             return None
     

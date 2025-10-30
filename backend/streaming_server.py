@@ -76,7 +76,6 @@ try:
     
     import fairseq2  # Required for seamless models
     
-    OFFICIAL_STREAMING = True
     logger.info("✅ Official SeamlessStreaming agents available")
     logger.info("✅ SeamlessStreamingS2STAgent imported successfully")
     logger.info("✅ SimulEval components imported successfully")
@@ -88,36 +87,19 @@ try:
     logger.info("🎯 Using official streaming implementation")
     
 except ImportError as e:
-    OFFICIAL_STREAMING = False
     logger.error(f"❌ Official SeamlessStreaming not available: {e}")
-    logger.info("ℹ️  Falling back to improved chunked implementation")
-    
-    # Fallback imports - try both v2 and v1 models
-    try:
-        # Try v2 model first (better quality)
-        try:
-            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech as SeamlessM4TForSpeechToSpeech
-            from transformers.models.seamless_m4t.processing_seamless_m4t import SeamlessM4TProcessor
-            FALLBACK_MODEL = "facebook/seamless-m4t-v2-large"
-            logger.info("📦 Using SeamlessM4T v2 fallback model")
-        except ImportError:
-            # Fallback to v1 model
-            from transformers import SeamlessM4TForSpeechToSpeech, SeamlessM4TProcessor
-            FALLBACK_MODEL = "facebook/seamless-m4t-large"
-            logger.info("📦 Using SeamlessM4T v1 fallback model")
-        
-        FALLBACK_AVAILABLE = True
-        logger.info("✅ Fallback implementation ready")
-    except ImportError:
-        FALLBACK_AVAILABLE = False
-        logger.error("❌ No translation models available")
+    logger.error("💡 Please install seamless-communication package:")
+    logger.error("   pip install git+https://github.com/facebookresearch/seamless_communication.git")
+    exit(1)
 
 class OfficialStreamingTranslator:
     """Uses the official SeamlessStreaming agents for proper streaming translation"""
     
     def __init__(self):
         self.agent = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for SeamlessStreaming models. CPU is not supported.")
+        self.device = "cuda"
         self.sample_rate = 16000
         self.initialized = False
         
@@ -129,9 +111,9 @@ class OfficialStreamingTranslator:
             # Configure agent arguments with all required parameters
             agent_args = {
                 # Device and model settings
-                "device": self.device,
-                "dtype": "fp16" if self.device == "cuda" else "fp32",
-                "fp16": self.device == "cuda",
+                "device": self.device,  # Always CUDA
+                "dtype": "fp16",
+                "fp16": True,
                 "task": task,
                 "tgt_lang": tgt_lang,
                 "src_lang": src_lang,
@@ -157,7 +139,7 @@ class OfficialStreamingTranslator:
                 "latency_metrics": [],  # Empty list instead of None
                 "computation_aware": False,
                 "start_index": 0,
-                "end_index": None,
+                "end_index": 999999,  # Use large number instead of None
                 
                 # Additional required parameters
                 "output": "/tmp",  # Set to a valid path instead of None
@@ -180,8 +162,14 @@ class OfficialStreamingTranslator:
                 
                 # Additional streaming parameters
                 "waitk": 3,  # Wait-k policy
-                "test_segment_size": None,
-                "source_segment_size": None,
+                "test_segment_size": 1000,  # Use default value instead of None
+                "source_segment_size": 1000,  # Use default value instead of None
+                
+                # Additional parameters that might be expected
+                "eval_latency": True,
+                "eval_quality": False,
+                "continue_finished": True,
+                "reset_model": False,
             }
             
             # Select appropriate agent class
@@ -192,69 +180,75 @@ class OfficialStreamingTranslator:
             else:
                 raise ValueError(f"Unsupported task: {task}")
             
+            # Convert args dict to object-like structure for build_agent
+            class Args:
+                def __init__(self, **kwargs):
+                    # Set default values for commonly expected attributes
+                    defaults = {
+                        'device': 'cuda',
+                        'dtype': 'fp16',
+                        'fp16': True,
+                        'task': 's2st',
+                        'tgt_lang': 'ben',
+                        'src_lang': 'eng',
+                        'unity_model_name': 'seamless_streaming_unity',
+                        'monotonic_decoder_model_name': 'seamless_streaming_monotonic_decoder',
+                        'vad': True,
+                        'vad_chunk_size': 480,
+                        'vad_threshold': 0.5,
+                        'min_starting_wait': 1000,
+                        'max_len_a': 1.2,  # Valid float instead of 0.0
+                        'max_len_b': 100,
+                        'beam_size': 3,
+                        'no_repeat_ngram_size': 3,
+                        'quality_metrics': [],
+                        'latency_metrics': [],
+                        'computation_aware': False,
+                        'start_index': 0,
+                        'end_index': 999999,  # Use large number instead of None
+                        'output': '/tmp',  # Valid path instead of None
+                        'log_level': 'INFO',
+                        'port': 12321,  # Valid port instead of None
+                        'host': 'localhost',  # Valid host instead of None
+                        'model_name': 'seamless_streaming_unity',
+                        'gated_model_dir': None,
+                        'sample_rate': 16000,
+                        'chunk_size': 4096,
+                        'temperature': 1.0,
+                        'length_penalty': 1.0,
+                        'max_new_tokens': 256,
+                        'waitk': 3,
+                        'test_segment_size': 1000,  # Use default value instead of None
+                        'source_segment_size': 1000,  # Use default value instead of None
+                        'eval_latency': True,
+                        'eval_quality': False,
+                        'continue_finished': True,
+                        'reset_model': False
+                    }
+                    
+                    # Set defaults first
+                    for key, value in defaults.items():
+                        setattr(self, key, value)
+                    
+                    # Override with provided kwargs
+                    for key, value in kwargs.items():
+                        setattr(self, key, value)
+                
+                def __getattr__(self, name):
+                    # Return None for any missing attributes instead of raising AttributeError
+                    return None
+            
+            args_obj = Args(**agent_args)
+            
             # Build the agent - try build_agent first, fallback to direct instantiation
             try:
-                self.agent = build_agent(agent_class, agent_args)
+                self.agent = build_agent(agent_class, args_obj)
                 logger.info("✅ Agent built using build_agent function")
             except Exception as build_error:
                 logger.warning(f"⚠️ build_agent failed: {build_error}")
                 logger.info("🔄 Trying direct agent instantiation...")
                 try:
-                    # Convert args dict to object-like structure that agents expect
-                    class Args:
-                        def __init__(self, **kwargs):
-                            # Set default values for commonly expected attributes
-                            defaults = {
-                                'device': 'cpu',
-                                'dtype': 'fp32',
-                                'fp16': False,
-                                'task': 's2st',
-                                'tgt_lang': 'ben',
-                                'src_lang': 'eng',
-                                'unity_model_name': 'seamless_streaming_unity',
-                                'monotonic_decoder_model_name': 'seamless_streaming_monotonic_decoder',
-                                'vad': True,
-                                'vad_chunk_size': 480,
-                                'vad_threshold': 0.5,
-                                'min_starting_wait': 1000,
-                                'max_len_a': 1.2,  # Valid float instead of 0.0
-                                'max_len_b': 100,
-                                'beam_size': 3,
-                                'no_repeat_ngram_size': 3,
-                                'quality_metrics': [],
-                                'latency_metrics': [],
-                                'computation_aware': False,
-                                'start_index': 0,
-                                'end_index': None,
-                                'output': '/tmp',  # Valid path instead of None
-                                'log_level': 'INFO',
-                                'port': 12321,  # Valid port instead of None
-                                'host': 'localhost',  # Valid host instead of None
-                                'model_name': 'seamless_streaming_unity',
-                                'gated_model_dir': None,
-                                'sample_rate': 16000,
-                                'chunk_size': 4096,
-                                'temperature': 1.0,
-                                'length_penalty': 1.0,
-                                'max_new_tokens': 256,
-                                'waitk': 3,
-                                'test_segment_size': None,
-                                'source_segment_size': None
-                            }
-                            
-                            # Set defaults first
-                            for key, value in defaults.items():
-                                setattr(self, key, value)
-                            
-                            # Override with provided kwargs
-                            for key, value in kwargs.items():
-                                setattr(self, key, value)
-                        
-                        def __getattr__(self, name):
-                            # Return None for any missing attributes instead of raising AttributeError
-                            return None
-                    
-                    args_obj = Args(**agent_args)
+                    # Use the same args object for direct instantiation
                     self.agent = agent_class(args_obj)
                     logger.info("✅ Agent created using direct instantiation")
                 except Exception as direct_error:
@@ -317,116 +311,7 @@ class OfficialStreamingTranslator:
             logger.error(f"Error processing audio segment: {e}")
             return []
 
-class FallbackStreamingTranslator:
-    """Fallback implementation using transformers SeamlessM4T"""
-    
-    def __init__(self):
-        self.model = None
-        self.processor = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.sample_rate = 16000
-        self.buffer = deque(maxlen=int(self.sample_rate * 10))  # 10 second buffer
-        self.min_chunk_duration = 3.0  # Process every 3 seconds
-        self.last_process_time = 0
-        
-    async def initialize(self, src_lang="eng", tgt_lang="ben"):
-        """Initialize the fallback model"""
-        try:
-            # Determine which model to use
-            try:
-                fallback_model = FALLBACK_MODEL
-            except NameError:
-                # FALLBACK_MODEL not defined, try to determine the best model
-                try:
-                    from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
-                    fallback_model = "facebook/seamless-m4t-v2-large"
-                    logger.info("📦 Using SeamlessM4T v2 fallback model")
-                except ImportError:
-                    fallback_model = "facebook/seamless-m4t-large"
-                    logger.info("📦 Using SeamlessM4T v1 fallback model")
-            
-            logger.info(f"Loading fallback model: {fallback_model}")
-            self.model = SeamlessM4TForSpeechToSpeech.from_pretrained(
-                fallback_model,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
-            ).to(self.device)
-            
-            self.processor = SeamlessM4TProcessor.from_pretrained(fallback_model)
-            logger.info("✅ Fallback model loaded successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load fallback model: {e}")
-            raise e
-    
-    def process_audio_segment(self, audio_data: np.ndarray, finished: bool = False) -> List[bytes]:
-        """Process audio with fallback chunked approach"""
-        current_time = time.time()
-        
-        # Add to buffer
-        if len(audio_data) > 0:
-            self.buffer.extend(audio_data)
-        
-        # Check if we should process
-        should_process = (
-            finished or
-            (current_time - self.last_process_time >= self.min_chunk_duration and 
-             len(self.buffer) >= int(self.sample_rate * 2))  # At least 2 seconds
-        )
-        
-        if not should_process:
-            return []
-        
-        try:
-            # Get audio chunk
-            chunk = np.array(list(self.buffer))
-            if len(chunk) == 0:
-                return []
-            
-            # Simple quality check
-            audio_energy = np.sqrt(np.mean(chunk ** 2))
-            if audio_energy < 0.01:
-                self.buffer.clear()
-                return []
-            
-            # Process with model
-            waveform = torch.from_numpy(chunk).float().unsqueeze(0)
-            
-            inputs = self.processor(
-                audio=waveform,
-                sampling_rate=self.sample_rate,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            with torch.no_grad():
-                audio_array = self.model.generate(
-                    **inputs,
-                    tgt_lang="ben",  # Hardcoded for now
-                    do_sample=False,
-                    num_beams=1,
-                    max_new_tokens=256
-                )
-            
-            # Convert output
-            if isinstance(audio_array, (list, tuple)) and len(audio_array) > 0:
-                audio_tensor = audio_array[0]
-                audio_np = audio_tensor.squeeze().detach().cpu().numpy()
-                
-                if len(audio_np) > 0:
-                    # Normalize and convert
-                    audio_np = audio_np / max(abs(audio_np.max()), abs(audio_np.min()), 1e-8)
-                    audio_16bit = (audio_np * 32767).astype(np.int16)
-                    
-                    # Clear buffer and update time
-                    self.buffer.clear()
-                    self.last_process_time = current_time
-                    
-                    return [audio_16bit.tobytes()]
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"Fallback processing error: {e}")
-            return []
+
 
 class StreamingSession:
     """Manages a streaming translation session"""
@@ -440,42 +325,14 @@ class StreamingSession:
         self.sample_rate = 16000
         
     async def initialize(self):
-        """Initialize the session with appropriate translator"""
-        if OFFICIAL_STREAMING:
-            try:
-                self.translator = OfficialStreamingTranslator()
-                await self.translator.initialize(
-                    task="s2st",
-                    src_lang=self.src_lang,
-                    tgt_lang=self.tgt_lang
-                )
-                logger.info("🎯 Using official SeamlessStreaming")
-                return
-            except Exception as e:
-                logger.warning(f"⚠️ Official streaming failed to initialize: {e}")
-                logger.info("🔄 Falling back to improved implementation...")
-        
-        # Fall back to improved implementation
-        try:
-            # Check fallback availability at runtime
-            fallback_available = True
-            try:
-                from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
-            except ImportError:
-                try:
-                    from transformers import SeamlessM4TForSpeechToSpeech
-                except ImportError:
-                    fallback_available = False
-            
-            if fallback_available:
-                self.translator = FallbackStreamingTranslator()
-                await self.translator.initialize(self.src_lang, self.tgt_lang)
-                logger.info("✅ Using improved fallback implementation")
-            else:
-                raise RuntimeError("No translation backend available")
-        except Exception as fallback_error:
-            logger.error(f"❌ Fallback initialization also failed: {fallback_error}")
-            raise RuntimeError("All translation backends failed to initialize")
+        """Initialize the session with official SeamlessStreaming"""
+        self.translator = OfficialStreamingTranslator()
+        await self.translator.initialize(
+            task="s2st",
+            src_lang=self.src_lang,
+            tgt_lang=self.tgt_lang
+        )
+        logger.info("🎯 Using official SeamlessStreaming")
     
     async def process_audio_chunk(self, audio_data: bytes):
         """Process incoming audio chunk"""
@@ -538,24 +395,10 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    # Check fallback availability at runtime
-    try:
-        fallback_available = FALLBACK_AVAILABLE
-    except NameError:
-        try:
-            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
-            fallback_available = True
-        except ImportError:
-            try:
-                from transformers import SeamlessM4TForSpeechToSpeech
-                fallback_available = True
-            except ImportError:
-                fallback_available = False
-    
     return {
         "status": "healthy",
-        "official_streaming": OFFICIAL_STREAMING,
-        "fallback_available": fallback_available
+        "official_streaming": True,
+        "cuda_available": torch.cuda.is_available()
     }
 
 @app.websocket("/ws/stream")
@@ -631,6 +474,16 @@ if __name__ == "__main__":
     import os
     import argparse
     
+    # Check CUDA availability before starting
+    if not torch.cuda.is_available():
+        print("❌ CUDA is not available!")
+        print("💡 SeamlessStreaming models require CUDA/GPU to run properly.")
+        print("💡 Please ensure you have:")
+        print("   - NVIDIA GPU with CUDA support")
+        print("   - PyTorch with CUDA installed")
+        print("   - Sufficient GPU memory (8GB+ recommended)")
+        exit(1)
+    
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='SeamlessStreaming Translation Service')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
@@ -645,24 +498,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print("🌊 SeamlessStreaming Translation Service")
-    print(f"🔧 Official streaming: {OFFICIAL_STREAMING}")
-    
-    # Check if fallback is available (it should be since we imported it earlier)
-    try:
-        fallback_status = FALLBACK_AVAILABLE
-    except NameError:
-        # FALLBACK_AVAILABLE not defined, check if we can import fallback components
-        try:
-            from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2ForSpeechToSpeech
-            fallback_status = True
-        except ImportError:
-            try:
-                from transformers import SeamlessM4TForSpeechToSpeech
-                fallback_status = True
-            except ImportError:
-                fallback_status = False
-    
-    print(f"🔄 Fallback available: {fallback_status}")
+    print("🎯 Official SeamlessStreaming Implementation")
     print(f"⚡ CUDA: {torch.cuda.is_available()}")
     
     # SSL configuration
@@ -718,10 +554,6 @@ if __name__ == "__main__":
     
     print(f"🌐 Server URL: {protocol}://{args.host}:{args.port}")
     print("=" * 50)
-    
-    if not OFFICIAL_STREAMING and not fallback_status:
-        print("❌ No translation backend available!")
-        exit(1)
     
     # Run server with SSL if configured
     uvicorn.run(

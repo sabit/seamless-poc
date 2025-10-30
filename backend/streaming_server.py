@@ -417,19 +417,69 @@ async def websocket_streaming_translate(websocket: WebSocket):
             pass
 
 if __name__ == "__main__":
+    import os
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='SeamlessStreaming Translation Service')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=7860, help='Port to bind to (default: 7860)')
+    parser.add_argument('--ssl-keyfile', help='Path to SSL private key file')
+    parser.add_argument('--ssl-certfile', help='Path to SSL certificate file')
+    parser.add_argument('--ssl-ca-certs', help='Path to SSL CA certificates file (optional)')
+    parser.add_argument('--ssl-version', choices=['TLSv1', 'TLSv1_1', 'TLSv1_2'], 
+                       default='TLSv1_2', help='SSL version (default: TLSv1_2)')
+    parser.add_argument('--no-ssl-verify', action='store_true', 
+                       help='Disable SSL certificate verification')
+    args = parser.parse_args()
+    
     print("🌊 SeamlessStreaming Translation Service")
     print(f"🔧 Official streaming: {OFFICIAL_STREAMING}")
     print(f"🔄 Fallback available: {FALLBACK_AVAILABLE}")
     print(f"⚡ CUDA: {torch.cuda.is_available()}")
+    
+    # SSL configuration
+    ssl_config = None
+    if args.ssl_keyfile and args.ssl_certfile:
+        import ssl
+        
+        ssl_context = ssl.SSLContext(getattr(ssl, f"PROTOCOL_{args.ssl_version}"))
+        ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
+        
+        if args.ssl_ca_certs:
+            ssl_context.load_verify_locations(args.ssl_ca_certs)
+        
+        if args.no_ssl_verify:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        else:
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
+        ssl_config = ssl_context
+        print(f"🔒 SSL enabled: {args.ssl_certfile}")
+        print(f"🔑 SSL key: {args.ssl_keyfile}")
+        if args.ssl_ca_certs:
+            print(f"📜 SSL CA: {args.ssl_ca_certs}")
+        protocol = "https"
+    else:
+        print("⚠️  SSL not configured - using HTTP")
+        protocol = "http"
+    
+    print(f"🌐 Server URL: {protocol}://{args.host}:{args.port}")
     print("=" * 50)
     
     if not OFFICIAL_STREAMING and not FALLBACK_AVAILABLE:
         print("❌ No translation backend available!")
         exit(1)
     
+    # Run server with SSL if configured
     uvicorn.run(
         "streaming_server:app",
-        host="0.0.0.0",
-        port=7860,
-        log_level="info"
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile,
+        ssl_ca_certs=args.ssl_ca_certs,
+        ssl_version=getattr(__import__('ssl'), f"PROTOCOL_{args.ssl_version}") if ssl_config else None
     )

@@ -587,11 +587,26 @@
             
             async playTranslatedAudio(audioData) {
                 try {
-                    console.log('Raw audio data received:', audioData.byteLength, 'bytes');
                     console.log('Audio data type:', audioData.constructor.name);
                     
+                    // Handle Blob vs ArrayBuffer
+                    let arrayBuffer;
+                    if (audioData instanceof Blob) {
+                        console.log('Converting Blob to ArrayBuffer, size:', audioData.size, 'bytes');
+                        arrayBuffer = await audioData.arrayBuffer();
+                    } else if (audioData instanceof ArrayBuffer) {
+                        console.log('Raw ArrayBuffer received:', audioData.byteLength, 'bytes');
+                        arrayBuffer = audioData;
+                    } else {
+                        console.error('Unexpected audio data type:', typeof audioData);
+                        this.updateStatus('Invalid audio data format', 'error');
+                        return;
+                    }
+                    
+                    console.log('Final ArrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+                    
                     // audioData is raw PCM bytes from server
-                    const pcmArray = new Int16Array(audioData);
+                    const pcmArray = new Int16Array(arrayBuffer);
                     console.log('Converted to PCM array:', pcmArray.length, 'samples');
                     
                     if (pcmArray.length === 0) {

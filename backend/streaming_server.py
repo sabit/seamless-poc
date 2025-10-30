@@ -314,7 +314,7 @@ class OfficialStreamingTranslator:
                 
                 # Create SpeechSegment from audio data (this is the standard format)
                 speech_segment = SpeechSegment(
-                    content=audio_array,  # Raw audio samples (numpy array)
+                    content=audio_array.tolist(),  # Convert to list (required format)
                     sample_rate=16000,
                     finished=segment_finished,
                     tgt_lang=self.target_lang
@@ -335,24 +335,12 @@ class OfficialStreamingTranslator:
                     # PUSH: Feed audio segment to agent for processing
                     logger.info(f"🔼 PUSH: {len(audio_array)} samples, finished={segment_finished}")
                     
-                    # Convert audio to tensor if needed - SeamlessStreaming expects tensors
-                    if hasattr(speech_segment, 'content') and isinstance(speech_segment.content, np.ndarray):
-                        # Convert numpy array to PyTorch tensor
-                        audio_tensor = torch.from_numpy(speech_segment.content).float()
-                        if audio_tensor.dim() == 1:
-                            audio_tensor = audio_tensor.unsqueeze(0)  # Add batch dimension
-                        logger.info(f"🔧 Converted to tensor shape: {audio_tensor.shape}")
-                        
-                        # Create new SpeechSegment with tensor content
-                        tensor_segment = SpeechSegment(
-                            index=speech_segment.index,
-                            content=audio_tensor,
-                            finished=speech_segment.finished,
-                            sample_rate=speech_segment.sample_rate
-                        )
-                        push_result = self.agent.push(tensor_segment)
-                    else:
-                        push_result = self.agent.push(speech_segment)
+                    # DEBUG: Check original speech_segment content type
+                    logger.info(f"🔍 Speech segment content type: {type(speech_segment.content)}")
+                    logger.info(f"� Speech segment content shape: {speech_segment.content.shape if hasattr(speech_segment.content, 'shape') else 'No shape attr'}")
+                    
+                    # Use the original speech_segment as-is (no conversion)
+                    push_result = self.agent.push(speech_segment)
                     
                     logger.info(f"🔼 Push result: {type(push_result)} = {push_result}")
                     

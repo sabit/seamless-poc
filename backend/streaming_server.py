@@ -329,25 +329,29 @@ class OfficialStreamingTranslator:
                 if isinstance(self.agent_states, list):
                     # Pipeline agent: Create ReadAction for proper SimulEval processing
                     try:
-                        # Method 1: Use ReadAction as input (standard SimulEval approach)
-                        read_action = ReadAction(speech_segment, finished=segment_finished)
-                        
-                        # Update first state and process
+                        # Method 1: Standard SimulEval approach - update state then get policy action
                         first_state = self.agent_states[0]
+                        
+                        # Update first state with speech segment
                         if not hasattr(first_state, 'source'):
                             first_state.source = []
-                        first_state.source.append(read_action)
+                        first_state.source.append(speech_segment)
                         first_state.source_finished = segment_finished
                         
                         # Process through pipeline
                         action = self.agent.policy(first_state)
-                        logger.info(f"🔧 Pipeline processed with ReadAction")
+                        logger.info(f"🔧 Pipeline processed with direct speech segment")
                         
-                    except Exception as read_error:
-                        logger.warning(f"⚠️ ReadAction approach failed: {read_error}")
+                    except Exception as direct_error:
+                        logger.warning(f"⚠️ Direct speech segment failed: {direct_error}")
                         
-                        # Method 2: Fallback to direct SpeechSegment processing
-                        first_state = self.agent_states[0]
+                        # Method 2: Fallback to ReadAction (signals need for more input)
+                        try:
+                            action = ReadAction()  # No parameters - just signals "need more input"
+                            logger.info(f"🔧 Using ReadAction to signal need for more input")
+                        except Exception as read_error:
+                            logger.warning(f"⚠️ ReadAction failed: {read_error}")
+                            action = None
                         if not hasattr(first_state, 'source'):
                             first_state.source = []
                         first_state.source.append(speech_segment)
@@ -358,13 +362,22 @@ class OfficialStreamingTranslator:
                     
                 else:
                     # Single agent: Update state directly
-                    if not hasattr(self.agent_states, 'source'):
-                        self.agent_states.source = []
-                    self.agent_states.source.append(speech_segment)
-                    self.agent_states.source_finished = segment_finished
-                    
-                    action = self.agent.policy(self.agent_states)
-                    logger.info(f"🔧 Single agent processed via policy")
+                    try:
+                        if not hasattr(self.agent_states, 'source'):
+                            self.agent_states.source = []
+                        self.agent_states.source.append(speech_segment)
+                        self.agent_states.source_finished = segment_finished
+                        
+                        action = self.agent.policy(self.agent_states)
+                        logger.info(f"🔧 Single agent processed via policy")
+                        
+                    except Exception as single_error:
+                        logger.warning(f"⚠️ Single agent failed: {single_error}")
+                        try:
+                            action = ReadAction()  # Fallback to ReadAction
+                            logger.info(f"🔧 Single agent using ReadAction fallback")
+                        except:
+                            action = None
                 
                 # FOCUS: Only log critical translation results
                 if action is None:

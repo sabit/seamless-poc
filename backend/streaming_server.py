@@ -45,8 +45,8 @@ class TeeLogger:
         self.original_stream.flush()
         self.log_file.flush()
 
-# Setup comprehensive logging
-log_file = open('seamless_full_debug.log', 'w', encoding='utf-8')
+# Setup comprehensive logging (save to project root)
+log_file = open('../seamless_full_debug.log', 'w', encoding='utf-8')
 sys.stdout = TeeLogger(sys.stdout, log_file)
 sys.stderr = TeeLogger(sys.stderr, log_file)
 
@@ -54,8 +54,8 @@ logging.basicConfig(level=logging.WARNING)  # Reduce general logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # Keep our logger at INFO level
 
-# Also log to file for debugging
-log_file_handler = logging.FileHandler('seamless_debug.log', mode='w')
+# Also log to file for debugging (save to project root)
+log_file_handler = logging.FileHandler('../seamless_debug.log', mode='w')
 log_file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log_file_handler.setFormatter(formatter)

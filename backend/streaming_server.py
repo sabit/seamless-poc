@@ -140,6 +140,7 @@ class OfficialStreamingTranslator:
         args.shift_size = 160  # Audio frame shift size
         args.segment_size = 2000  # Audio segment size
         args.window_size = 2000  # Feature extraction window size
+        args.feature_dim = 80  # Feature dimension (e.g., mel-spectrogram features)
         args.denormalize = False  # Whether to denormalize the output
         
         # Text generation parameters
@@ -164,6 +165,7 @@ class OfficialStreamingTranslator:
         logger.info(f"   🔄 Shift size: {args.shift_size}")
         logger.info(f"   📐 Segment size: {args.segment_size}")
         logger.info(f"   🪟 Window size: {args.window_size}")
+        logger.info(f"   🎵 Feature dim: {args.feature_dim}")
         logger.info(f"   📏 Max len a: {args.max_len_a}")
         logger.info(f"   📏 Max len b: {args.max_len_b}")
         logger.info(f"   🔍 Beam size: {args.beam_size}")

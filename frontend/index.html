@@ -250,6 +250,8 @@
                 this.currentAudioSource = null;
                 this.currentSessionId = null;
                 this.playedSessionIds = new Set();
+                this.lastAudioSize = 0;
+                this.lastAudioTime = 0;
                 this.clientId = Math.random().toString(36).substr(2, 9);
                 this.outputVolume = 0.8;
                 
@@ -380,9 +382,13 @@
                             console.error('❌ Failed to parse server message:', e, 'Raw data:', event.data);
                         }
                     } else {
-                        // Handle binary audio data (raw PCM)
-                        console.log('🎵 Binary audio data received for playback');
-                        this.playTranslatedAudio(event.data);
+                        // Handle binary audio data (raw PCM) - only if recording is not active
+                        if (!this.isRecording) {
+                            console.log('🎵 Binary audio data received for playback');
+                            this.playTranslatedAudio(event.data);
+                        } else {
+                            console.log('🔇 Ignoring audio response during active recording');
+                        }
                     }
                 };
                 
@@ -464,9 +470,16 @@
             
             async startRecording() {
                 try {
+                    // Stop any current audio and reset state
+                    if (this.currentAudioSource) {
+                        this.currentAudioSource.stop();
+                        this.currentAudioSource = null;
+                    }
+                    
                     // Generate new session ID for this recording
                     this.currentSessionId = Math.random().toString(36).substr(2, 9);
                     console.log('🆔 Starting new recording session:', this.currentSessionId);
+                    console.log('🧹 Reset audio state for new session');
                     
                     console.log('🎤 Requesting microphone access...');
                     this.audioStream = await navigator.mediaDevices.getUserMedia({
@@ -505,11 +518,15 @@
                     };
                     
                     this.mediaRecorder.onstop = () => {
-                        console.log('� Recording stopped, sending complete audio...');
+                        console.log('🎬 Recording stopped, processing complete audio...');
                         if (this.audioChunks.length > 0) {
                             const completeAudio = new Blob(this.audioChunks, { type: this.audioChunks[0].type });
                             console.log('📦 Complete audio blob created:', completeAudio.size, 'bytes');
-                            this.convertAndSendAudio(completeAudio);
+                            
+                            // Add small delay to ensure clean processing
+                            setTimeout(() => {
+                                this.convertAndSendAudio(completeAudio);
+                            }, 100);
                         }
                         this.audioChunks = [];
                     };
@@ -604,11 +621,23 @@
             
             async playTranslatedAudio(audioData) {
                 try {
+                    const now = Date.now();
+                    const audioSize = audioData.size || audioData.byteLength || 0;
+                    
                     // Skip if we've already played audio for this session
                     if (this.currentSessionId && this.playedSessionIds.has(this.currentSessionId)) {
                         console.log('🔇 Skipping duplicate audio for session:', this.currentSessionId);
                         return;
                     }
+                    
+                    // Skip if same size audio received within 2 seconds (likely duplicate)
+                    if (audioSize === this.lastAudioSize && (now - this.lastAudioTime) < 2000) {
+                        console.log('🔇 Skipping likely duplicate audio - same size within 2s');
+                        return;
+                    }
+                    
+                    this.lastAudioSize = audioSize;
+                    this.lastAudioTime = now;
                     
                     // Stop any currently playing audio to prevent overlapping
                     if (this.currentAudioSource) {
@@ -736,7 +765,7 @@
                     source.start(0);
                     
                     console.log('🎵 Playing translated audio:', audioBuffer.duration.toFixed(2), 'seconds');
-                    this.updateStatus('🔊 Playing translation...', 'success');
+                    this.updateStatus(`🔊 Playing translation (${audioBuffer.duration.toFixed(1)}s, Session: ${this.currentSessionId})`, 'success');
                     
                 } catch (error) {
                     console.error('Audio playback error:', error);

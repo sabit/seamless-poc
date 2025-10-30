@@ -23,22 +23,18 @@ from queue import Queue, Empty
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="SeamlessStreaming Translation API")
+# Check CUDA availability and enforce GPU usage
+if not torch.cuda.is_available():
+    logger.error("❌ CUDA not available! SeamlessStreaming requires GPU")
+    logger.error("💡 This model does not run on CPU - GPU is mandatory")
+    raise RuntimeError("CUDA required for SeamlessStreaming - model does not run on CPU")
 
-# Determine the correct path for frontend files based on where the script is run from
-import os
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-frontend_path = os.path.join(project_root, "frontend")
+logger.info(f"✅ CUDA available: {torch.cuda.is_available()}")
+logger.info(f"🎮 GPU device: {torch.cuda.get_device_name()}")
+logger.info(f"📦 PyTorch version: {torch.__version__}")
 
-# If running from project root, frontend is in current directory
-if not os.path.exists(frontend_path):
-    frontend_path = "frontend"
-
-app.mount("/static", StaticFiles(directory=frontend_path), name="static")
-
-# Language code mapping
-LANGUAGE_MAPPING = {
+# Language code mapping for SeamlessStreaming
+LANG_MAPPING = {
     "en": "eng",
     "bn": "ben",
 }
@@ -90,136 +86,74 @@ except ImportError as e:
     logger.error(f"❌ Official SeamlessStreaming not available: {e}")
     logger.error("💡 Please install seamless-communication package:")
     logger.error("   pip install git+https://github.com/facebookresearch/seamless_communication.git")
-    exit(1)
+
 
 class OfficialStreamingTranslator:
-    """Official SeamlessStreaming implementation using Facebook's agents"""
+    """Official SeamlessStreaming implementation"""
     
-    def __init__(self, source_lang: str = "eng", target_lang: str = "ben"):
-        logger.info("🔧 Initializing official SeamlessStreaming translator...")
-        
-        self.source_lang = source_lang
-        self.target_lang = target_lang
-        
-        # Enforce CUDA requirement
-        if not torch.cuda.is_available():
-            raise RuntimeError("❌ CUDA is required for SeamlessStreaming. This model does not run on CPU.")
-        
+    def __init__(self):
+        self.agent = None
+        self.initialized = False
         self.device = torch.device("cuda")
-        self.dtype = torch.float16
         
-        logger.info(f"Using device: {self.device} with dtype: {self.dtype}")
-        logger.info(f"Translation: {source_lang} → {target_lang}")
+    def _create_official_args(self, task="s2st", src_lang="eng", tgt_lang="ben"):
+        """Create arguments object for SeamlessStreaming agent"""
         
+        # Import the Args class from SimulEval
         try:
-            # Create Args object based on official source code patterns
-            self.args = self._create_official_args()
-            
-            # Initialize official SeamlessStreaming agent
-            logger.info("🚀 Creating SeamlessStreamingS2STAgent...")
-            self.agent = SeamlessStreamingS2STAgent(self.args)
-            logger.info("✅ Official SeamlessStreaming agent initialized successfully!")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize official agent: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
-    def _create_official_args(self):
-        """Create Args object based on official SeamlessStreaming source code analysis"""
-        from argparse import Namespace
-        import torch
+            from argparse import Namespace
+            args = Namespace()
+        except ImportError:
+            # Fallback to simple object
+            class Args:
+                pass
+            args = Args()
         
-        # Create args matching the official implementation patterns
-        args = Namespace()
-        
-        # === Core UnitYPipelineMixin parameters (required by all agents) ===
-        args.task = "s2st"  # Speech-to-Speech Translation
+        # Model configuration - using unity and monotonic multipath models  
+        args.model_name = "seamless_streaming_unity"
+        args.vocoder_name = "vocoder_pretssel" 
         args.unity_model_name = "seamless_streaming_unity"
-        args.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
-        args.sample_rate = 16000.0
-        args.dtype = "fp16"
-        args.device = "cuda"
-        args.fp16 = True
         
-        # === Agent-Specific Parameters (from source code add_args methods) ===
+        # Device and precision configuration
+        args.device = torch.device("cuda")
+        args.dtype = torch.float16
         
-        # OnlineFeatureExtractorAgent.add_args()
-        args.upstream_idx = 0
-        args.feature_dim = 1024
-        args.frame_num = 1
-        args.shift_size = 160  # MISSING PARAMETER - shift size for feature extraction
-        args.segment_size = 480  # Segment size for feature extraction
-        args.denormalize = False  # MISSING PARAMETER - denormalization flag
+        # Language configuration
+        args.source_lang = src_lang
+        args.target_lang = tgt_lang
+        args.task = task
         
-        # OfflineWav2VecBertEncoderAgent.add_args()
-        args.encoder_chunk_size = 480
-        args.encoder_segment_size = 480  # Additional encoder parameter
+        # Streaming configuration parameters
+        args.min_unit_chunk_size = 50  # Minimum number of units to accumulate
+        args.d_factor = 1.0  # Duration factor for timing
+        args.shift_size = 160  # Audio frame shift size
+        args.segment_size = 2000  # Audio segment size
+        args.denormalize = False  # Whether to denormalize the output
         
-        # UnitYMMATextDecoderAgent.add_args()
-        args.min_starting_wait_w2vbert = 16
-        args.min_starting_wait_mma = 4
+        # Text generation parameters
+        args.max_len_a = 1.2  # Length penalty coefficient a
+        args.max_len_b = 100   # Length penalty coefficient b  
+        args.beam_size = 5     # Beam search size
+        args.len_penalty = 1.0 # Length penalty
         
-        # NARUnitYUnitDecoderAgent.add_args() - CRITICAL MISSING PARAMETERS!
-        args.min_unit_chunk_size = 50  # Required by NARUnitYUnitDecoderAgent
-        args.d_factor = 1.0  # Required by NARUnitYUnitDecoderAgent
+        # Buffer and timing configuration
+        args.buffer_size = 1000
+        args.sample_rate = 16000
         
-        # VocoderAgent.add_args()
-        args.vocoder_name = "vocoder_v2"
-        
-        # === SimulEval Framework Base Parameters ===
-        args.source_segment_size = 480
-        args.target_segment_size = None
-        args.waitk_lagging = 3
-        args.quality_metrics = "BLEU"
-        args.latency_metrics = "StartOffset EndOffset"
-        args.segment_size = 480  # Base segment size
-        args.chunk_size = 480  # Base chunk size
-        
-        # === Additional Framework Parameters ===
-        args.output = None
-        args.config = None
-        args.no_gpu = False
-        args.model_name = args.unity_model_name  # Some agents expect this
-        
-        # === Additional Agent Parameters (to prevent AttributeError) ===
-        args.window_size = 480  # Window size for processing
-        args.hop_length = 160  # Hop length for feature extraction
-        args.n_fft = 512  # FFT size for spectrograms
-        args.win_length = 400  # Window length
-        args.center = True  # Center padding for STFT
-        args.pad_mode = 'reflect'  # Padding mode
-        args.normalize = True  # Normalize features
-        args.preemphasis = 0.97  # Preemphasis coefficient
-        
-        # === Language Configuration ===
-        args.source_lang = self.source_lang
-        args.target_lang = self.target_lang
-        
-        # === Device and Type Processing (must be done after all string assignments) ===
-        # Convert string device to torch.device
-        device_str = args.device
-        args.device = torch.device(device_str)
-        
-        # Convert string dtype to torch dtype
-        if args.dtype == "fp16" and args.device.type != "cpu":
-            args.dtype = torch.float16
-        else:
-            args.dtype = torch.float32
-        
-        # === Debug Information ===
-        logger.info("📝 Created comprehensive Args object based on source code analysis:")
-        logger.info(f"   🎯 Task: {args.task}")
+        logger.info(f"🔧 Creating args for SeamlessStreaming agent:")
+        logger.info(f"   📋 Task: {args.task}")
         logger.info(f"   🔧 Unity model: {args.unity_model_name}")
         logger.info(f"   💾 Device: {args.device} (type: {args.device.type})")
         logger.info(f"   📊 Dtype: {args.dtype}")
         logger.info(f"   🔢 Min unit chunk size: {args.min_unit_chunk_size}")
         logger.info(f"   ⏱️  Duration factor: {args.d_factor}")
-        logger.info(f"   � Shift size: {args.shift_size}")
+        logger.info(f"   🔄 Shift size: {args.shift_size}")
         logger.info(f"   📐 Segment size: {args.segment_size}")
-        logger.info(f"   �🗣️  Languages: {args.source_lang} → {args.target_lang}")
+        logger.info(f"   📏 Max len a: {args.max_len_a}")
+        logger.info(f"   📏 Max len b: {args.max_len_b}")
+        logger.info(f"   🔍 Beam size: {args.beam_size}")
+        logger.info(f"   ⚖️  Len penalty: {args.len_penalty}")
+        logger.info(f"   🗣️  Languages: {args.source_lang} → {args.target_lang}")
         
         return args
         
@@ -229,503 +163,296 @@ class OfficialStreamingTranslator:
             logger.info(f"Initializing official SeamlessStreaming agent for {task}: {src_lang} → {tgt_lang}")
             
             # Configure agent arguments with all required parameters
-            agent_args = {
-                # Device and model settings
-                "device": self.device,  # Always CUDA
-                "dtype": "fp16",
-                "fp16": True,
-                "task": task,
-                "tgt_lang": tgt_lang,
-                "src_lang": src_lang,
-                
-                # Model names
-                "unity_model_name": "seamless_streaming_unity",
-                "monotonic_decoder_model_name": "seamless_streaming_monotonic_decoder",
-                
-                # VAD settings
-                "vad": True,
-                "vad_chunk_size": 480,  # 30ms chunks at 16kHz
-                "vad_threshold": 0.5,
-                
-                # Latency and quality control - fix the NoneType comparison issue
-                "min_starting_wait": 1000,  # Wait for 1 second of audio
-                "max_len_a": 1.2,  # Set to a valid float instead of 0.0
-                "max_len_b": 100,
-                "beam_size": 3,
-                "no_repeat_ngram_size": 3,
-                
-                # SimulEval specific parameters
-                "quality_metrics": [],  # Empty list instead of None
-                "latency_metrics": [],  # Empty list instead of None
-                "computation_aware": False,
-                "start_index": 0,
-                "end_index": 999999,  # Use large number instead of None
-                
-                # Additional SimulEval parameters to prevent None comparisons
-                "scores": [],
-                "instances": [],
-                "prediction": "",
-                "reference": "",
-                
-                # Additional required parameters
-                "output": "/tmp",  # Set to a valid path instead of None
-                "log_level": "INFO",
-                "port": 12321,  # Set to a valid port instead of None
-                "host": "localhost",  # Set to a valid host instead of None
-                
-                # Model loading settings
-                "gated_model_dir": "/tmp",  # Set to valid path instead of None
-                "model_name": "seamless_streaming_unity",  # Set explicitly
-                
-                # Generation settings
-                "temperature": 1.0,
-                "length_penalty": 1.0,
-                "max_new_tokens": 256,
-                
-                # Audio settings
-                "sample_rate": self.sample_rate,
-                "chunk_size": 4096,
-                
-                # Additional streaming parameters
-                "waitk": 3,  # Wait-k policy
-                "test_segment_size": 1000,  # Use default value instead of None
-                "source_segment_size": 1000,  # Use default value instead of None
-                
-                # Additional parameters that might be expected
-                "eval_latency": True,
-                "eval_quality": False,
-                "continue_finished": True,
-                "reset_model": False,
-                
-                # More specific agent parameters
-                "source": "/tmp/source.wav",
-                "target": "/tmp/target.txt",
-                "config": None,
-                "system_dir": "/tmp",
-                "user_dir": "/tmp",
-            }
+            args = self._create_official_args(task, src_lang, tgt_lang)
             
-            # Select appropriate agent class
-            if task == "s2st":
-                agent_class = SeamlessStreamingS2STAgent
-            elif task == "s2t":
-                agent_class = SeamlessStreamingS2TAgent
-            else:
-                raise ValueError(f"Unsupported task: {task}")
+            # Initialize the streaming agent with proper configuration
+            logger.info("🔧 Creating SeamlessStreamingS2STAgent...")
+            self.agent = SeamlessStreamingS2STAgent(args)
             
-            # Convert args dict to object-like structure for build_agent
-            class Args:
-                def __init__(self, **kwargs):
-                    # Set default values for commonly expected attributes
-                    defaults = {
-                        'device': 'cuda',
-                        'dtype': 'fp16',
-                        'fp16': True,
-                        'task': 's2st',
-                        'tgt_lang': 'ben',
-                        'src_lang': 'eng',
-                        'unity_model_name': 'seamless_streaming_unity',
-                        'monotonic_decoder_model_name': 'seamless_streaming_monotonic_decoder',
-                        'vad': True,
-                        'vad_chunk_size': 480,
-                        'vad_threshold': 0.5,
-                        'min_starting_wait': 1000,
-                        'max_len_a': 1.2,  # Valid float instead of 0.0
-                        'max_len_b': 100,
-                        'beam_size': 3,
-                        'no_repeat_ngram_size': 3,
-                        'quality_metrics': [],
-                        'latency_metrics': [],
-                        'computation_aware': False,
-                        'start_index': 0,
-                        'end_index': 999999,  # Use large number instead of None
-                        'output': '/tmp',  # Valid path instead of None
-                        'log_level': 'INFO',
-                        'port': 12321,  # Valid port instead of None
-                        'host': 'localhost',  # Valid host instead of None
-                        'model_name': 'seamless_streaming_unity',
-                        'gated_model_dir': '/tmp',
-                        'sample_rate': 16000,
-                        'chunk_size': 4096,
-                        'temperature': 1.0,
-                        'length_penalty': 1.0,
-                        'max_new_tokens': 256,
-                        'waitk': 3,
-                        'test_segment_size': 1000,  # Use default value instead of None
-                        'source_segment_size': 1000,  # Use default value instead of None
-                        'eval_latency': True,
-                        'eval_quality': False,
-                        'continue_finished': True,
-                        'reset_model': False,
-                        'scores': [],
-                        'instances': [],
-                        'prediction': '',
-                        'reference': ''
-                    }
-                    
-                    # Set defaults first
-                    for key, value in defaults.items():
-                        setattr(self, key, value)
-                    
-                    # Override with provided kwargs
-                    for key, value in kwargs.items():
-                        setattr(self, key, value)
-                
-                def __getattr__(self, name):
-                    # Return None for any missing attributes instead of raising AttributeError
-                    return None
-            
-            args_obj = Args(**agent_args)
-            
-            # Try direct agent instantiation with minimal args
-            try:
-                # Create a minimal args object with only essential parameters
-                class MinimalArgs:
-                    def __init__(self):
-                        self.device = self.device
-                        self.dtype = "fp16"
-                        self.fp16 = True
-                        self.task = task
-                        self.tgt_lang = tgt_lang
-                        self.src_lang = src_lang
-                        self.unity_model_name = "seamless_streaming_unity"
-                        self.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
-                        self.vad = True
-                        self.vad_chunk_size = 480
-                        self.vad_threshold = 0.5
-                        self.min_starting_wait = 1000
-                        self.max_len_a = 1.2
-                        self.max_len_b = 100
-                        self.beam_size = 3
-                        # Set all other attributes to safe defaults
-                        for key, value in agent_args.items():
-                            if not hasattr(self, key):
-                                setattr(self, key, value)
-                    
-                    def __getattr__(self, name):
-                        # Return safe defaults for missing attributes
-                        return getattr(self, name, 0)  # Return 0 instead of None
-                
-                minimal_args = MinimalArgs()
-                self.agent = agent_class(minimal_args)
-                logger.info("✅ Agent created with minimal args")
-            except Exception as minimal_error:
-                logger.error(f"❌ Minimal instantiation failed: {minimal_error}")
-                # Try the original approach as last resort
-                try:
-                    self.agent = build_agent(agent_class, args_obj)
-                    logger.info("✅ Agent built using build_agent as fallback")
-                except Exception as final_error:
-                    logger.error(f"❌ All agent creation methods failed: {final_error}")
-                    raise final_error
+            logger.info("✅ Official SeamlessStreaming agent initialized successfully!")
+            logger.info("🎯 Agent is ready for streaming translation")
             
             self.initialized = True
-            
-            logger.info("✅ Official streaming agent initialized successfully")
+            return True
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize official streaming agent: {e}")
-            logger.error(f"Error details: {str(e)}")
-            logger.info("🔄 Will fall back to improved chunked implementation")
-            self.initialized = False
-            raise e
+            logger.error(f"💡 Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            return False
     
-    def process_audio_segment(self, audio_data: np.ndarray, finished: bool = False) -> List[bytes]:
-        """Process audio segment and return any generated output"""
-        if not self.initialized or self.agent is None:
-            logger.error("Agent not initialized")
-            return []
-        
-        try:
-            # Create speech segment
-            if len(audio_data) > 0:
-                segment = SpeechSegment(
-                    content=audio_data,
-                    sample_rate=self.sample_rate,
-                    finished=finished
-                )
-            else:
-                segment = EmptySegment(finished=finished)
+    async def translate_stream(self, audio_chunk: bytes) -> Optional[str]:
+        """Process audio chunk and return translation if available"""
+        if not self.initialized or not self.agent:
+            logger.warning("⚠️  Agent not initialized")
+            return None
             
-            # Process with agent
+        try:
+            # Convert audio bytes to numpy array
+            audio_np = np.frombuffer(audio_chunk, dtype=np.float32)
+            
+            # Create speech segment for the agent
+            segment = SpeechSegment(
+                content=audio_np,
+                sample_rate=16000,
+                finished=False
+            )
+            
+            # Process with the streaming agent
             action = self.agent.policy(segment)
             
-            results = []
-            if isinstance(action, WriteAction):
-                # Got output from the agent
-                if hasattr(action, 'content') and action.content is not None:
-                    if isinstance(action.content, torch.Tensor):
-                        # Convert audio tensor to bytes
-                        audio_np = action.content.detach().cpu().numpy()
-                        if audio_np.ndim > 1:
-                            audio_np = audio_np.squeeze()
-                        
-                        # Normalize and convert to PCM
-                        if len(audio_np) > 0:
-                            audio_np = audio_np / max(abs(audio_np.max()), abs(audio_np.min()), 1e-8)
-                            audio_16bit = (audio_np * 32767).astype(np.int16)
-                            results.append(audio_16bit.tobytes())
-                    elif isinstance(action.content, str):
-                        # Text output (for S2T task)
-                        results.append(action.content.encode('utf-8'))
-            
-            return results
+            # Check if we have translation output
+            if hasattr(action, 'content') and action.content:
+                logger.info(f"🎯 Translation: {action.content}")
+                return action.content
+                
+            return None
             
         except Exception as e:
-            logger.error(f"Error processing audio segment: {e}")
-            return []
-
+            logger.error(f"❌ Translation error: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            return None
 
 
 class StreamingSession:
-    """Manages a streaming translation session"""
+    """Manages a streaming translation session using official implementation only"""
     
-    def __init__(self, websocket: WebSocket, src_lang: str, tgt_lang: str):
-        self.websocket = websocket
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.official_translator = OfficialStreamingTranslator()
+        self.audio_buffer = deque(maxlen=100)
+        self.is_active = False
+        self.src_lang = "eng"
+        self.tgt_lang = "ben"
+        self.task = "s2st"
+        
+    async def initialize(self, src_lang: str = "eng", tgt_lang: str = "ben", task: str = "s2st"):
+        """Initialize the streaming session"""
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-        self.translator = None
-        self.running = False
-        self.sample_rate = 16000
+        self.task = task
         
-    async def initialize(self):
-        """Initialize the session with official SeamlessStreaming"""
-        self.translator = OfficialStreamingTranslator()
-        await self.translator.initialize(
-            task="s2st",
-            src_lang=self.src_lang,
-            tgt_lang=self.tgt_lang
-        )
-        logger.info("🎯 Using official SeamlessStreaming")
+        logger.info(f"🎬 Initializing session {self.session_id}")
+        logger.info(f"🗣️  Task: {task}, Languages: {src_lang} → {tgt_lang}")
+        
+        # Initialize official translator
+        success = await self.official_translator.initialize(task, src_lang, tgt_lang)
+        
+        if success:
+            self.is_active = True
+            logger.info(f"✅ Session {self.session_id} ready with official SeamlessStreaming")
+            return True
+        else:
+            logger.error(f"❌ Session {self.session_id} failed to initialize")
+            return False
     
-    async def process_audio_chunk(self, audio_data: bytes):
-        """Process incoming audio chunk"""
+    async def process_audio(self, audio_chunk: bytes) -> Optional[str]:
+        """Process audio chunk and return translation"""
+        if not self.is_active:
+            return None
+            
         try:
-            # Convert bytes to numpy array
-            if len(audio_data) % 2 != 0:
-                audio_data = audio_data + b'\x00'
+            # Process with official translator
+            result = await self.official_translator.translate_stream(audio_chunk)
             
-            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            
-            logger.info(f"Processing audio chunk: {len(audio_np)} samples")
-            
-            # Process with translator
-            results = self.translator.process_audio_segment(audio_np)
-            
-            # Send any results
-            for result in results:
-                if result and len(result) > 0:
-                    await self.websocket.send_bytes(result)
-                    logger.info(f"Sent translation: {len(result)} bytes")
+            if result:
+                logger.info(f"📤 Session {self.session_id} translation: {result}")
+                return result
+                
+            return None
             
         except Exception as e:
-            logger.error(f"Error processing audio chunk: {e}")
+            logger.error(f"❌ Session {self.session_id} processing error: {e}")
+            return None
     
-    async def finalize(self):
-        """Finalize the session"""
-        if self.translator:
-            try:
-                # Process any remaining audio
-                results = self.translator.process_audio_segment(np.array([]), finished=True)
-                for result in results:
-                    if result and len(result) > 0:
-                        await self.websocket.send_bytes(result)
-            except Exception as e:
-                logger.error(f"Error finalizing session: {e}")
+    def close(self):
+        """Close the streaming session"""
+        self.is_active = False
+        logger.info(f"🔚 Session {self.session_id} closed")
 
-class ConnectionManager:
-    def __init__(self):
-        self.sessions: Dict[str, StreamingSession] = {}
-    
-    async def create_session(self, websocket: WebSocket, client_id: str, src_lang: str, tgt_lang: str):
-        session = StreamingSession(websocket, src_lang, tgt_lang)
-        await session.initialize()
-        self.sessions[client_id] = session
-        return session
-    
-    def remove_session(self, client_id: str):
-        if client_id in self.sessions:
-            del self.sessions[client_id]
 
-manager = ConnectionManager()
+# Session manager
+sessions: Dict[str, StreamingSession] = {}
+
+# FastAPI app setup
+app = FastAPI(title="SeamlessStreaming API", version="1.0.0")
+
+# Mount frontend static files
+app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 @app.get("/")
-async def root():
-    # Use the same frontend path logic
-    index_path = os.path.join(frontend_path, "index.html")
-    if not os.path.exists(index_path):
-        index_path = "frontend/index.html"
-    return FileResponse(index_path)
+async def read_root():
+    """Serve the frontend HTML"""
+    return FileResponse("../frontend/index.html")
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "official_streaming": True,
-        "cuda_available": torch.cuda.is_available()
-    }
+    """Health check endpoint"""
+    return {"status": "healthy", "cuda_available": torch.cuda.is_available()}
 
 @app.websocket("/ws/stream")
-async def websocket_streaming_translate(websocket: WebSocket):
-    """WebSocket endpoint for proper streaming translation"""
+async def websocket_endpoint(websocket: WebSocket):
+    """Main WebSocket endpoint for streaming translation"""
     await websocket.accept()
-    session = None
-    client_id = None
+    session_id = f"session_{int(time.time())}"
+    session = StreamingSession(session_id)
+    sessions[session_id] = session
+    
+    logger.info(f"🔌 New WebSocket connection: {session_id}")
     
     try:
-        # Wait for configuration
-        config_msg = await websocket.receive_text()
-        config = json.loads(config_msg)
+        # Wait for initialization message
+        init_data = await websocket.receive_json()
+        src_lang = LANG_MAPPING.get(init_data.get("srcLang", "en"), "eng")
+        tgt_lang = LANG_MAPPING.get(init_data.get("tgtLang", "bn"), "ben")
+        task = init_data.get("task", "s2st")
         
-        if config.get("type") != "start_stream":
-            await websocket.send_text('{"type":"error","msg":"Expected start_stream message"}')
-            return
+        # Initialize session
+        success = await session.initialize(src_lang, tgt_lang, task)
         
-        # Parse config
-        src_lang = LANGUAGE_MAPPING.get(config.get('src_lang', 'en'), 'eng')
-        tgt_lang = LANGUAGE_MAPPING.get(config.get('tgt_lang', 'bn'), 'ben')
-        
-        logger.info(f"🎤 Starting streaming session: {src_lang} → {tgt_lang}")
-        
-        # Create session
-        client_id = f"stream_{int(time.time())}"
-        session = await manager.create_session(websocket, client_id, src_lang, tgt_lang)
-        session.running = True
-        
-        # Send ready confirmation
-        await websocket.send_text('{"type":"stream_ready"}')
-        
-        # Process audio stream
-        while session.running:
-            message = await websocket.receive()
+        if success:
+            await websocket.send_json({
+                "type": "init_success",
+                "message": "SeamlessStreaming ready"
+            })
             
-            if "bytes" in message:
-                audio_chunk = message["bytes"]
-                if len(audio_chunk) > 0:
-                    await session.process_audio_chunk(audio_chunk)
-                    
-            elif "text" in message:
+            # Main processing loop
+            while True:
                 try:
-                    ctrl = json.loads(message["text"])
-                    if ctrl.get("type") == "stop_stream":
-                        logger.info("🛑 Stopping stream")
-                        session.running = False
-                        if session:
-                            await session.finalize()
-                        break
-                except Exception:
-                    pass
-        
-        # Cleanup
-        if client_id:
-            manager.remove_session(client_id)
-        await websocket.send_text('{"type":"stream_end"}')
-        
-    except WebSocketDisconnect:
-        logger.info("📡 Client disconnected")
-        if client_id:
-            manager.remove_session(client_id)
+                    data = await websocket.receive()
+                    
+                    if "bytes" in data:
+                        # Process audio data
+                        audio_data = data["bytes"]
+                        result = await session.process_audio(audio_data)
+                        
+                        if result:
+                            await websocket.send_json({
+                                "type": "translation",
+                                "text": result,
+                                "session_id": session_id
+                            })
+                    
+                    elif "text" in data:
+                        # Handle JSON messages
+                        json_data = json.loads(data["text"])
+                        if json_data.get("type") == "end_session":
+                            logger.info(f"🔚 End session requested for {session_id}")
+                            break
+                            
+                except WebSocketDisconnect:
+                    logger.info(f"🔌 WebSocket disconnected: {session_id}")
+                    break
+                except Exception as e:
+                    logger.error(f"❌ WebSocket error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Processing error: {str(e)}"
+                    })
+        else:
+            await websocket.send_json({
+                "type": "init_error", 
+                "message": "Failed to initialize SeamlessStreaming"
+            })
+            
     except Exception as e:
-        logger.error(f"❌ WebSocket error: {e}")
-        if client_id:
-            manager.remove_session(client_id)
+        logger.error(f"❌ WebSocket setup error: {e}")
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Connection error: {str(e)}"
+        })
+    finally:
+        # Cleanup
+        session.close()
+        if session_id in sessions:
+            del sessions[session_id]
+
+
+# SSL Configuration
+def create_ssl_context():
+    """Create SSL context for secure connections"""
+    import ssl
+    
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    
+    # Security settings
+    context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS')
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    
+    try:
+        # Try to load SSL certificate and key
+        context.load_cert_chain("../ssl/cert.pem", "../ssl/key.pem")
+        logger.info("✅ SSL certificate loaded successfully")
+        return context
+    except FileNotFoundError:
+        logger.warning("⚠️  SSL certificate not found, generating new one...")
+        
+        # Generate SSL certificate
+        import subprocess
+        import os
+        
+        # Create SSL directory
+        os.makedirs("../ssl", exist_ok=True)
+        
+        # Generate private key and certificate
         try:
-            await websocket.send_text(f'{{"type":"error","msg":"{str(e)}"}}')
-        except:
-            pass
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "rsa:4096", 
+                "-keyout", "../ssl/key.pem", "-out", "../ssl/cert.pem",
+                "-days", "365", "-nodes", "-subj", "/CN=localhost"
+            ], check=True, capture_output=True)
+            
+            # Load the generated certificate
+            context.load_cert_chain("../ssl/cert.pem", "../ssl/key.pem")
+            logger.info("✅ SSL certificate generated and loaded")
+            return context
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ Failed to generate SSL certificate: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ SSL setup error: {e}")
+            return None
+
 
 if __name__ == "__main__":
-    import os
-    import argparse
+    import ssl
     
-    # Check CUDA availability before starting
-    if not torch.cuda.is_available():
-        print("❌ CUDA is not available!")
-        print("💡 SeamlessStreaming models require CUDA/GPU to run properly.")
-        print("💡 Please ensure you have:")
-        print("   - NVIDIA GPU with CUDA support")
-        print("   - PyTorch with CUDA installed")
-        print("   - Sufficient GPU memory (8GB+ recommended)")
-        exit(1)
-    
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SeamlessStreaming Translation Service')
-    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
-    parser.add_argument('--port', type=int, default=7860, help='Port to bind to (default: 7860)')
-    parser.add_argument('--ssl-keyfile', help='Path to SSL private key file')
-    parser.add_argument('--ssl-certfile', help='Path to SSL certificate file')
-    parser.add_argument('--ssl-ca-certs', help='Path to SSL CA certificates file (optional)')
-    parser.add_argument('--ssl-version', choices=['TLSv1', 'TLSv1_1', 'TLSv1_2'], 
-                       default='TLSv1_2', help='SSL version (default: TLSv1_2)')
-    parser.add_argument('--no-ssl-verify', action='store_true', 
-                       help='Disable SSL certificate verification')
-    args = parser.parse_args()
-    
-    print("🌊 SeamlessStreaming Translation Service")
-    print("🎯 Official SeamlessStreaming Implementation")
-    print(f"⚡ CUDA: {torch.cuda.is_available()}")
+    logger.info("🚀 Starting SeamlessStreaming Server...")
+    logger.info("🎯 Official SeamlessStreaming implementation")
+    logger.info("💪 CUDA-only mode (no CPU fallback)")
     
     # SSL configuration
-    ssl_config = None
-    if args.ssl_keyfile and args.ssl_certfile:
-        import ssl
+    ssl_context = create_ssl_context()
+    
+    if ssl_context:
+        logger.info("🔒 Starting server with SSL support")
+        logger.info("🌐 HTTPS: https://localhost:8000")
+        logger.info("🔌 WSS: wss://localhost:8000/ws/stream")
         
-        # Use modern SSL context creation with better compatibility
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        
-        # Set minimum TLS version based on user preference
-        if args.ssl_version == 'TLSv1_2':
-            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3  # Allow TLS 1.3
-        elif args.ssl_version == 'TLSv1_1':
-            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_1
-        else:  # TLSv1
-            ssl_context.minimum_version = ssl.TLSVersion.TLSv1
-        
-        # Configure cipher suites for better compatibility
-        ssl_context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS')
-        
-        # Load certificate and key with error handling
-        try:
-            ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
-            print(f"✅ SSL certificate and key loaded successfully")
-        except ssl.SSLError as ssl_err:
-            print(f"❌ SSL certificate/key error: {ssl_err}")
-            print(f"💡 Try regenerating certificates with: chmod +x scripts/fix_ssl_cert.sh && ./scripts/fix_ssl_cert.sh")
-            exit(1)
-        except Exception as cert_err:
-            print(f"❌ Certificate loading error: {cert_err}")
-            exit(1)
-        
-        if args.ssl_ca_certs:
-            ssl_context.load_verify_locations(args.ssl_ca_certs)
-        
-        if args.no_ssl_verify:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-        
-        ssl_config = ssl_context
-        print(f"🔒 SSL enabled: {args.ssl_certfile}")
-        print(f"🔑 SSL key: {args.ssl_keyfile}")
-        if args.ssl_ca_certs:
-            print(f"📜 SSL CA: {args.ssl_ca_certs}")
-        protocol = "https"
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=8000,
+            ssl_keyfile="../ssl/key.pem",
+            ssl_certfile="../ssl/cert.pem",
+            ssl_version=ssl.PROTOCOL_TLS,
+            ssl_cert_reqs=ssl.CERT_NONE,
+            log_level="info"
+        )
     else:
-        print("⚠️  SSL not configured - using HTTP")
-        protocol = "http"
-    
-    print(f"🌐 Server URL: {protocol}://{args.host}:{args.port}")
-    print("=" * 50)
-    
-    # Run server with SSL if configured
-    uvicorn.run(
-        "streaming_server:app",
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        ssl_keyfile=args.ssl_keyfile,
-        ssl_certfile=args.ssl_certfile,
-        ssl_ca_certs=args.ssl_ca_certs
-    )
+        logger.info("🌐 Starting server without SSL")
+        logger.info("🌐 HTTP: http://localhost:8000")
+        logger.info("🔌 WS: ws://localhost:8000/ws/stream")
+        
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=8000,
+            log_level="info"
+        )

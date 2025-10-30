@@ -80,7 +80,7 @@
         }
         
         .record-btn {
-            background: #28a745;
+            background: #007bff;
             color: white;
             border: none;
             padding: 15px 30px;
@@ -92,7 +92,7 @@
         }
         
         .record-btn:hover {
-            background: #1e7e34;
+            background: #0056b3;
         }
         
         .record-btn.recording {
@@ -196,7 +196,7 @@
         
         <h1>🗣️ Real-time Speech Translation</h1>
         <p style="text-align: center; color: #666; margin-bottom: 30px;">
-            English ↔ Bangla Speech-to-Speech Translation
+            English ↔ Bangla Continuous Streaming Translation
         </p>
         
         <div class="controls">
@@ -220,19 +220,8 @@
                 </div>
             </div>
             
-            <div class="mode-selection" style="text-align: center; margin-bottom: 20px;">
-                <label style="margin-right: 20px;">
-                    <input type="radio" name="mode" value="complete" checked> Complete Recording
-                </label>
-                <label>
-                    <input type="radio" name="mode" value="streaming"> Continuous Streaming
-                </label>
-            </div>
-            
             <div class="record-controls">
-                <button class="record-btn" id="recordBtn">🎤 Start Recording</button>
-                <button class="record-btn" id="stopBtn" style="display: none;">⏹️ Stop</button>
-                <button class="record-btn" id="streamBtn" style="display: none;">🌊 Start Streaming</button>
+                <button class="record-btn" id="streamBtn">🌊 Start Streaming</button>
             </div>
             
             <div class="audio-controls">
@@ -245,7 +234,7 @@
         </div>
         
         <div class="status info" id="statusMessage">
-            Click "Start Recording" to begin real-time translation
+            Click "Start Streaming" for continuous real-time translation
         </div>
     </div>
 
@@ -253,21 +242,14 @@
         class SpeechTranslator {
             constructor() {
                 this.websocket = null;
-                this.mediaRecorder = null;
                 this.audioStream = null;
-                this.isRecording = false;
                 this.isStreaming = false;
-                this.streamingMode = 'complete'; // 'complete' or 'streaming'
                 this.audioContext = null;
                 this.currentAudioSource = null;
-                this.currentSessionId = null;
-                this.playedSessionIds = new Set();
                 this.lastAudioSize = 0;
                 this.lastAudioTime = 0;
-                this.clientId = Math.random().toString(36).substr(2, 9);
                 this.outputVolume = 0.8;
                 this.streamingProcessor = null;
-                this.audioWorkletNode = null;
                 
                 this.initializeUI();
                 this.connectWebSocket();
@@ -336,8 +318,6 @@
             }
             
             initializeUI() {
-                this.recordBtn = document.getElementById('recordBtn');
-                this.stopBtn = document.getElementById('stopBtn');
                 this.streamBtn = document.getElementById('streamBtn');
                 this.swapBtn = document.getElementById('swapBtn');
                 this.sourceLanguage = document.getElementById('sourceLanguage');
@@ -346,52 +326,19 @@
                 this.connectionStatus = document.getElementById('connectionStatus');
                 this.outputVolumeSlider = document.getElementById('outputVolume');
                 this.volumeValue = document.getElementById('volumeValue');
-                this.modeRadios = document.querySelectorAll('input[name="mode"]');
                 
-                this.recordBtn.addEventListener('click', () => this.startRecording());
-                this.stopBtn.addEventListener('click', () => this.stopRecording());
                 this.streamBtn.addEventListener('click', () => this.toggleStreaming());
                 this.swapBtn.addEventListener('click', () => this.swapLanguages());
-                
-                // Mode selection
-                this.modeRadios.forEach(radio => {
-                    radio.addEventListener('change', (e) => {
-                        this.streamingMode = e.target.value;
-                        this.updateUIForMode();
-                        
-                        // Reconnect WebSocket with appropriate endpoint
-                        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                            this.websocket.close();
-                            setTimeout(() => this.connectWebSocket(), 1000);
-                        }
-                    });
-                });
                 
                 this.outputVolumeSlider.addEventListener('input', (e) => {
                     this.outputVolume = parseFloat(e.target.value);
                     this.volumeValue.textContent = `${Math.round(this.outputVolume * 100)}%`;
                 });
                 
-                // Initial UI state
-                this.updateUIForMode();
-                
-                // Initialize streaming mode from page load
-                const initialMode = document.querySelector('input[name="mode"]:checked')?.value || 'complete';
-                this.streamingMode = initialMode;
-                console.log('🚀 Initial mode set to:', this.streamingMode);
+                console.log('🚀 Streaming mode initialized');
             }
             
-            updateUIForMode() {
-                if (this.streamingMode === 'streaming') {
-                    this.recordBtn.style.display = 'none';
-                    this.streamBtn.style.display = 'inline-block';
-                    this.updateStatus('Click "Start Streaming" for continuous real-time translation', 'info');
-                } else {
-                    this.recordBtn.style.display = 'inline-block';
-                    this.streamBtn.style.display = 'none';
-                    this.updateStatus('Click "Start Recording" to record and translate complete phrases', 'info');
-                }
-            }
+
             
             connectWebSocket() {
                 // Close existing connection if any
@@ -400,11 +347,9 @@
                     this.websocket.close();
                 }
                 
-                const wsUrl = this.streamingMode === 'streaming' ? 
-                    'wss://34.81.26.139:7860/ws/stream' : 
-                    'wss://34.81.26.139:7860/ws/translate';
+                const wsUrl = 'wss://34.81.26.139:7860/ws/stream';
                 
-                console.log('🔗 Attempting WebSocket connection to:', wsUrl, 'Mode:', this.streamingMode);
+                console.log('🔗 Attempting WebSocket connection to:', wsUrl);
                 this.updateStatus('Connecting to server...', 'info');
                 this.updateConnectionStatus('connecting');
                 
@@ -413,19 +358,13 @@
                 this.websocket.onopen = () => {
                     console.log('✅ WebSocket connected successfully');
                     
-                    // Send appropriate start message based on mode
-                    const startMessage = this.streamingMode === 'streaming' ? {
+                    // Send streaming start message
+                    const startMessage = {
                         type: "start_stream",
                         src_lang: this.sourceLanguage.value,
                         tgt_lang: this.targetLanguage.value,
                         sample_rate: 16000,
                         chunk_size: 1024
-                    } : {
-                        type: "start",
-                        src_lang: this.sourceLanguage.value,
-                        tgt_lang: this.targetLanguage.value,
-                        sample_rate: 16000,
-                        format: "pcm_s16le"
                     };
                     
                     console.log('📤 Sending start message:', startMessage);
@@ -440,11 +379,10 @@
                         console.log('📄 JSON message received:', event.data);
                         try {
                             const msg = JSON.parse(event.data);
-                            if (msg.type === 'ready' || msg.type === 'stream_ready') {
-                                console.log('🟢 Session ready - translation system active');
-                                this.updateStatus('Connected! Ready to translate.', 'success');
+                            if (msg.type === 'stream_ready') {
+                                console.log('🟢 Streaming session ready - translation system active');
+                                this.updateStatus('Connected! Ready to stream.', 'success');
                                 this.updateConnectionStatus('connected');
-                                this.recordBtn.disabled = false;
                                 this.streamBtn.disabled = false;
                             } else if (msg.type === 'error') {
                                 console.error('❌ Server error:', msg.msg);
@@ -460,8 +398,8 @@
                             console.error('❌ Failed to parse server message:', e, 'Raw data:', event.data);
                         }
                     } else {
-                        // Handle binary audio data (raw PCM) - always try to play
-                        console.log('🎵 Binary audio data received for playback, streaming mode:', this.streamingMode);
+                        // Handle binary audio data (raw PCM)
+                        console.log('🎵 Binary audio data received for playback');
                         this.playTranslatedAudio(event.data);
                     }
                 };
@@ -470,7 +408,6 @@
                     console.log('🔴 WebSocket disconnected - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
                     this.updateStatus('Disconnected from server. Trying to reconnect...', 'error');
                     this.updateConnectionStatus('disconnected');
-                    this.recordBtn.disabled = true;
                     this.streamBtn.disabled = true;
                     
                     // Try to reconnect after 3 seconds
@@ -490,229 +427,12 @@
                 };
             }
             
-            async handleWebSocketMessage(event) {
-                if (event.data instanceof Blob) {
-                    // Handle binary audio data
-                    const arrayBuffer = await event.data.arrayBuffer();
-                    const dataView = new DataView(arrayBuffer);
-                    
-                    // Read header length (first 4 bytes)
-                    const headerLength = dataView.getUint32(0, true);
-                    
-                    // Parse header
-                    const headerBytes = new Uint8Array(arrayBuffer, 4, headerLength);
-                    const headerText = new TextDecoder().decode(headerBytes);
-                    const header = JSON.parse(headerText);
-                    
-                    if (header.type === 'audio') {
-                        // Extract audio data
-                        const audioData = arrayBuffer.slice(4 + headerLength);
-                        await this.playAudio(audioData);
-                        this.updateStatus(`Playing translated audio (${header.src_lang} → ${header.tgt_lang})`, 'success');
-                    }
-                } else {
-                    // Handle text messages
-                    const message = JSON.parse(event.data);
-                    if (message.type === 'error') {
-                        this.updateStatus(`Error: ${message.message}`, 'error');
-                    }
-                }
-            }
-            
-            async playAudio(audioArrayBuffer) {
-                try {
-                    if (!this.audioContext) {
-                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    }
-                    
-                    const audioBuffer = await this.audioContext.decodeAudioData(audioArrayBuffer);
-                    const source = this.audioContext.createBufferSource();
-                    const gainNode = this.audioContext.createGain();
-                    
-                    source.buffer = audioBuffer;
-                    gainNode.gain.value = this.outputVolume;
-                    
-                    source.connect(gainNode);
-                    gainNode.connect(this.audioContext.destination);
-                    
-                    source.start();
-                    
-                } catch (error) {
-                    console.error('Audio playback error:', error);
-                    this.updateStatus('Audio playback failed', 'error');
-                }
-            }
-            
-            async startRecording() {
-                try {
-                    // Stop any current audio and reset state
-                    if (this.currentAudioSource) {
-                        this.currentAudioSource.stop();
-                        this.currentAudioSource = null;
-                    }
-                    
-                    // Generate new session ID for this recording
-                    this.currentSessionId = Math.random().toString(36).substr(2, 9);
-                    console.log('🆔 Starting new recording session:', this.currentSessionId);
-                    console.log('🧹 Reset audio state for new session');
-                    
-                    console.log('🎤 Requesting microphone access...');
-                    this.audioStream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            sampleRate: 16000,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true
-                        }
-                    });
-                    
-                    console.log('✅ Microphone access granted, stream tracks:', this.audioStream.getTracks().length);
-                    
-                    // Chrome only supports WebM, but we'll use the most compatible version
-                    let options = { mimeType: 'audio/webm' };  // Most basic WebM format
-                    
-                    // Try specific codec for better compatibility
-                    if (MediaRecorder.isTypeSupported('audio/webm;codecs=pcm')) {
-                        options = { mimeType: 'audio/webm;codecs=pcm' };
-                        console.log('✅ Using WebM with PCM codec for easier processing');
-                    } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-                        options = { mimeType: 'audio/webm;codecs=opus' };
-                        console.log('✅ Using WebM with Opus codec');
-                    } else {
-                        console.log('✅ Using basic WebM format');
-                    }
-                    
-                    console.log('🎙️ Creating MediaRecorder with options:', options);
-                    this.mediaRecorder = new MediaRecorder(this.audioStream, options);
-                    
-                    // Store audio chunks for complete recording
-                    this.audioChunks = [];
-                    
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            console.log('📊 Audio chunk collected:', event.data.size, 'bytes, MIME type:', event.data.type);
-                            this.audioChunks.push(event.data);
-                        }
-                    };
-                    
-                    this.mediaRecorder.onstop = () => {
-                        console.log('🎬 Recording stopped, processing complete audio...');
-                        if (this.audioChunks.length > 0) {
-                            const completeAudio = new Blob(this.audioChunks, { type: this.audioChunks[0].type });
-                            console.log('📦 Complete audio blob created:', completeAudio.size, 'bytes');
-                            
-                            // Add small delay to ensure clean processing
-                            setTimeout(() => {
-                                this.convertAndSendAudio(completeAudio);
-                            }, 100);
-                        }
-                        this.audioChunks = [];
-                    };
-                    
-                    this.mediaRecorder.onerror = (event) => {
-                        console.error('❌ MediaRecorder error:', event);
-                        console.error('Error details:', {
-                            error: event.error,
-                            type: event.type,
-                            timestamp: new Date().toISOString()
-                        });
-                        this.updateStatus('Recording error: ' + event.error, 'error');
-                    };
-                    
-                    console.log('🎬 Starting MediaRecorder for complete recording');
-                    this.mediaRecorder.start(); // Record continuously until stopped
-                    this.isRecording = true;
-                    
-                    this.recordBtn.style.display = 'none';
-                    this.stopBtn.style.display = 'inline-block';
-                    this.recordBtn.classList.add('recording');
-                    
-                    console.log('🔴 Recording started - UI updated');
-                    this.updateStatus('🎤 Recording... Speak now!', 'info');
-                    
-                } catch (error) {
-                    console.error('Recording error:', error);
-                    this.updateStatus('Microphone access denied or not available', 'error');
-                }
-            }
-            
-            stopRecording() {
-                console.log('⏹️ Stopping recording session:', this.currentSessionId);
-                
-                if (this.mediaRecorder && this.isRecording) {
-                    console.log('📊 MediaRecorder state before stop:', this.mediaRecorder.state);
-                    this.mediaRecorder.stop();
-                    this.isRecording = false;
-                    console.log('✅ MediaRecorder stopped');
-                }
-                
-                if (this.audioStream) {
-                    console.log('🔇 Stopping audio stream tracks:', this.audioStream.getTracks().length);
-                    this.audioStream.getTracks().forEach(track => {
-                        console.log('  - Stopping track:', track.kind, track.label);
-                        track.stop();
-                    });
-                    this.audioStream = null;
-                }
-                
-                this.recordBtn.style.display = 'inline-block';
-                this.stopBtn.style.display = 'none';
-                this.recordBtn.classList.remove('recording');
-                
-                console.log('🔄 UI reset to ready state');
-                this.updateStatus('Recording stopped. Click "Start Recording" to continue.', 'info');
-            }
-            
-            async convertAndSendAudio(audioBlob) {
-                try {
-                    console.log('🔄 Converting audio blob for transmission...');
-                    console.log('📊 Blob details:', {
-                        size: audioBlob.size,
-                        type: audioBlob.type,
-                        lastModified: audioBlob.lastModified || 'N/A'
-                    });
-                    
-                    // For browser compatibility, send the original audio blob
-                    // Backend will handle the format detection and conversion
-                    const arrayBuffer = await audioBlob.arrayBuffer();
-                    console.log('📤 Converted to ArrayBuffer:', arrayBuffer.byteLength, 'bytes');
-                    
-                    // Create a simple hash of the audio data to verify uniqueness
-                    const audioHash = Array.from(new Uint8Array(arrayBuffer.slice(0, 100)))
-                        .map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
-                    console.log('🔍 Audio fingerprint (first 100 bytes):', audioHash);
-                    console.log('🎯 Session ID for this audio:', this.currentSessionId);
-                    
-                    // Verify WebSocket is still open
-                    if (this.websocket.readyState !== WebSocket.OPEN) {
-                        console.error('❌ WebSocket not open, state:', this.websocket.readyState);
-                        this.updateStatus('Connection lost during send', 'error');
-                        return;
-                    }
-                    
-                    // Send the raw audio data to server for processing
-                    console.log('🚀 Sending audio data to server...');
-                    this.websocket.send(arrayBuffer);
-                    console.log('✅ Audio data sent successfully');
-                    this.updateStatus('Processing translation...', 'info');
-                    
-                } catch (error) {
-                    console.error('❌ Error sending audio:', error);
-                    console.error('Error stack:', error.stack);
-                    this.updateStatus('Audio send error: ' + error.message, 'error');
-                }
-            }
+
             
             async playTranslatedAudio(audioData) {
                 try {
                     const now = Date.now();
                     const audioSize = audioData.size || audioData.byteLength || 0;
-                    
-                    // Skip if we've already played audio for this session
-                    if (this.currentSessionId && this.playedSessionIds.has(this.currentSessionId)) {
-                        console.log('🔇 Skipping duplicate audio for session:', this.currentSessionId);
-                        return;
-                    }
                     
                     // Skip if same size audio received within 2 seconds (likely duplicate)
                     if (audioSize === this.lastAudioSize && (now - this.lastAudioTime) < 2000) {
@@ -730,7 +450,7 @@
                         this.currentAudioSource = null;
                     }
                     
-                    console.log('🎵 Processing audio for session:', this.currentSessionId);
+                    console.log('🎵 Processing streaming audio');
                     console.log('Audio data type:', audioData.constructor.name);
                     
                     // Handle Blob vs ArrayBuffer
@@ -849,24 +569,12 @@
                         this.currentAudioSource = null;
                     };
                     
-                    // Mark this session as played to prevent duplicates
-                    if (this.currentSessionId) {
-                        this.playedSessionIds.add(this.currentSessionId);
-                        console.log('✅ Marked session as played:', this.currentSessionId);
-                        
-                        // Clean up old session IDs to prevent memory growth
-                        if (this.playedSessionIds.size > 10) {
-                            const oldestId = this.playedSessionIds.values().next().value;
-                            this.playedSessionIds.delete(oldestId);
-                        }
-                    }
-                    
                     // Start playback
                     console.log('▶️ Starting audio playback...');
                     source.start(0);
                     
                     console.log('🎵 Playing translated audio:', audioBuffer.duration.toFixed(2), 'seconds');
-                    this.updateStatus(`🔊 Playing translation (${audioBuffer.duration.toFixed(1)}s, Session: ${this.currentSessionId})`, 'success');
+                    this.updateStatus(`🔊 Playing translation (${audioBuffer.duration.toFixed(1)}s)`, 'success');
                     
                 } catch (error) {
                     console.error('Audio playback error:', error);
@@ -883,35 +591,7 @@
                 }
             }
             
-            async sendAudioData(audioBlob) {
-                try {
-                    const arrayBuffer = await audioBlob.arrayBuffer();
-                    
-                    // Create header
-                    const header = {
-                        src_lang: this.sourceLanguage.value,
-                        tgt_lang: this.targetLanguage.value
-                    };
-                    
-                    const headerBytes = new TextEncoder().encode(JSON.stringify(header));
-                    const headerLengthBytes = new Uint8Array(4);
-                    const dataView = new DataView(headerLengthBytes.buffer);
-                    dataView.setUint32(0, headerBytes.length, true);
-                    
-                    // Combine header length + header + audio data
-                    const message = new Uint8Array(4 + headerBytes.length + arrayBuffer.byteLength);
-                    message.set(headerLengthBytes, 0);
-                    message.set(headerBytes, 4);
-                    message.set(new Uint8Array(arrayBuffer), 4 + headerBytes.length);
-                    
-                    this.websocket.send(message);
-                    this.updateStatus('Processing translation...', 'info');
-                    
-                } catch (error) {
-                    console.error('Send audio error:', error);
-                    this.updateStatus('Failed to send audio data', 'error');
-                }
-            }
+
             
             async toggleStreaming() {
                 if (!this.isStreaming) {
@@ -1016,11 +696,9 @@
                 if (isActive) {
                     this.streamBtn.textContent = '⏹️ Stop Streaming';
                     this.streamBtn.classList.add('recording');
-                    this.modeRadios.forEach(radio => radio.disabled = true);
                 } else {
                     this.streamBtn.textContent = '🌊 Start Streaming';
                     this.streamBtn.classList.remove('recording');
-                    this.modeRadios.forEach(radio => radio.disabled = false);
                 }
             }
             

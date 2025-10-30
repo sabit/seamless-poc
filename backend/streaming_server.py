@@ -313,79 +313,74 @@ class OfficialStreamingTranslator:
             
             # Process with the streaming agent
             try:
-                # Update states with current segment - PROPER PIPELINE MANAGEMENT
-                if isinstance(self.agent_states, list):
-                    # Pipeline agents - ONLY update the FIRST state (FeatureStates) with audio
-                    # The pipeline should flow: FeatureStates -> AgentStates -> ... -> AgentStates
+                # CRITICAL FIX: Use agent.pop() method for proper pipeline processing
+                # Based on SeamlessStreaming research: UnitYAgentPipeline.pop() handles sequential processing
+                
+                # Create proper SpeechSegment from audio data
+                from simuleval.data.segments import SpeechSegment
+                speech_segment = SpeechSegment(
+                    content=segment,
+                    finished=segment_finished,
+                    tgt_lang=self.target_lang
+                )
+                
+                logger.info(f"📥 PIPELINE INPUT: {len(segment)} samples, finished={segment_finished}")
+                
+                # Method 1: Try proper pipeline processing with push/pop
+                try:
+                    # Push segment to agent and get processed output
+                    self.agent.pushback([speech_segment])
+                    output_segment = self.agent.pop(self.agent_states if isinstance(self.agent_states, list) else None)
                     
-                    # CRITICAL FIX: Proper pipeline data flow - each stage processes sequentially
+                    # Convert to action format
+                    if output_segment and hasattr(output_segment, 'content') and output_segment.content:
+                        action = WriteAction(output_segment.content, finished=getattr(output_segment, 'finished', segment_finished))
+                        logger.info(f"✅ PIPELINE OUTPUT: {type(output_segment.content)}")
+                    else:
+                        action = None
+                        logger.info("🔄 Pipeline processing - no output yet")
+                
+                except Exception as push_error:
+                    logger.warning(f"⚠️ Push/pop method failed: {push_error}")
                     
-                    # Step 1: Feed audio ONLY to first state (FeatureStates)
-                    first_state = self.agent_states[0]
-                    if hasattr(first_state, 'source'):
-                        first_state.source = [segment]
-                        first_state.source_finished = segment_finished
-                    if hasattr(first_state, 'tgt_lang'):
-                        first_state.tgt_lang = self.target_lang
-                    if hasattr(first_state, 'target_lang'):
-                        first_state.target_lang = self.target_lang
-                    if hasattr(first_state, 'finished'):
-                        first_state.finished = segment_finished
-                    
-                    # Step 2: Process pipeline sequentially - EACH STAGE individually
-                    action = None
-                    
-                    for i, state in enumerate(self.agent_states):
-                        # Set language parameters on current state
-                        if hasattr(state, 'tgt_lang'):
-                            state.tgt_lang = self.target_lang
-                        if hasattr(state, 'target_lang'):
-                            state.target_lang = self.target_lang
-                        if hasattr(state, 'finished'):
-                            state.finished = segment_finished
+                    # Method 2: Fallback to direct state update + pop
+                    try:
+                        if isinstance(self.agent_states, list):
+                            # Update first agent state with audio input
+                            first_state = self.agent_states[0]
+                            if not hasattr(first_state, 'source'):
+                                first_state.source = []
+                            first_state.source.append(segment)
+                            first_state.source_finished = segment_finished
+                            if hasattr(first_state, 'tgt_lang'):
+                                first_state.tgt_lang = self.target_lang
+                        else:
+                            # Single agent state
+                            if not hasattr(self.agent_states, 'source'):
+                                self.agent_states.source = []
+                            self.agent_states.source.append(segment) 
+                            self.agent_states.source_finished = segment_finished
+                            if hasattr(self.agent_states, 'tgt_lang'):
+                                self.agent_states.tgt_lang = self.target_lang
                         
-                        # Log state before processing
-                        source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
-                        target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
-                        logger.info(f"🔧 State {i}: source={source_len}, target={target_len}, finished={segment_finished}")
+                        # Use pop() method for pipeline processing
+                        output_segment = self.agent.pop(self.agent_states if isinstance(self.agent_states, list) else None)
                         
-                        # Process INDIVIDUAL stage through agent policy
-                        stage_result = self.agent.policy(state)
+                        if output_segment and hasattr(output_segment, 'content') and output_segment.content:
+                            action = WriteAction(output_segment.content, finished=getattr(output_segment, 'finished', segment_finished))
+                            logger.info(f"✅ FALLBACK OUTPUT: {type(output_segment.content)}")
+                        else:
+                            action = None
+                            logger.info("🔄 Fallback processing - no output yet")
+                    
+                    except Exception as pop_error:
+                        logger.error(f"❌ Pop method also failed: {pop_error}")
                         
-                        # Chain output to next stage (pipeline flow)
-                        if i < len(self.agent_states) - 1 and hasattr(state, 'target') and state.target:
-                            next_state = self.agent_states[i + 1]
-                            # Pass current stage's output as next stage's input
-                            next_state.source = state.target
-                            next_state.source_finished = state.finished
-                            logger.info(f"🔗 Chained {len(state.target)} outputs: State{i} → State{i+1}")
-                        
-                        # Final stage result is our action
-                        if i == len(self.agent_states) - 1:
-                            action = stage_result
-                    
-                    # OLD CODE: Single policy call for entire pipeline (BROKEN)
-                    # action = self.agent.policy(self.agent_states)
-                    
-                    # DEBUG: After policy call, check if pipeline has processed data
-                    if self.total_samples < 50000 and segment_finished:
-                        logger.info("🔍 POST-POLICY pipeline state:")
-                        for i, state in enumerate(self.agent_states):
-                            source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
-                            target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
-                            logger.info(f"   State {i}: source={source_len}, target={target_len}")
-                    
-                else:
-                    # Single agent
-                    self.agent_states.source = [segment]
-                    self.agent_states.source_finished = segment_finished
-                    if hasattr(self.agent_states, 'tgt_lang'):
-                        self.agent_states.tgt_lang = self.target_lang
-                    if hasattr(self.agent_states, 'target_lang'):
-                        self.agent_states.target_lang = self.target_lang
-                    if hasattr(self.agent_states, 'finished'):
-                        self.agent_states.finished = segment_finished
-                    action = self.agent.policy(self.agent_states)
+                        # Method 3: Last resort - manual policy call
+                        if isinstance(self.agent_states, list):
+                            action = self.agent.policy(self.agent_states[0])
+                        else:
+                            action = self.agent.policy(self.agent_states)
                 
                 # FOCUS: Only log critical translation results
                 if action is None:

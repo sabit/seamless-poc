@@ -19,9 +19,10 @@ from collections import deque
 import threading
 from queue import Queue, Empty
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging - FOCUSED MODE
+logging.basicConfig(level=logging.WARNING)  # Reduce general logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # Keep our logger at INFO level
 
 # Check CUDA availability and enforce GPU usage
 if not torch.cuda.is_available():
@@ -175,30 +176,8 @@ class OfficialStreamingTranslator:
         args.buffer_size = 1000
         args.sample_rate = 16000
         
-        logger.info(f"🔧 Creating args for SeamlessStreaming agent:")
-        logger.info(f"   📋 Task: {args.task}")
-        logger.info(f"   🔧 Unity model: {args.unity_model_name}")
-        logger.info(f"   � Monotonic decoder: {args.monotonic_decoder_model_name}")
-        logger.info(f"   �💾 Device: {args.device} (type: {args.device.type})")
-        logger.info(f"   📊 Dtype: {args.dtype}")
-        logger.info(f"   � FP16: {args.fp16}")
-        logger.info(f"   �🔢 Min unit chunk size: {args.min_unit_chunk_size}")
-        logger.info(f"   ⏱️  Duration factor: {args.d_factor}")
-        logger.info(f"   🔄 Shift size: {args.shift_size}")
-        logger.info(f"   📐 Segment size: {args.segment_size}")
-        logger.info(f"   🪟 Window size: {args.window_size}")
-        logger.info(f"   🎵 Feature dim: {args.feature_dim}")
-        logger.info(f"   ⏳ Min starting wait w2vbert: {args.min_starting_wait_w2vbert}")
-        logger.info(f"   ✏️  Max consecutive write: {args.max_consecutive_write}")
-        logger.info(f"   ⏰ Min starting wait: {args.min_starting_wait}")
-        logger.info(f"   🚫 No early stop: {args.no_early_stop}")
-        logger.info(f"   🎯 Decision threshold: {args.decision_threshold}")
-        logger.info(f"   � Decision method: {args.decision_method}")
-        logger.info(f"   �📏 Max len a: {args.max_len_a}")
-        logger.info(f"   📏 Max len b: {args.max_len_b}")
-        logger.info(f"   🔍 Beam size: {args.beam_size}")
-        logger.info(f"   ⚖️  Len penalty: {args.len_penalty}")
-        logger.info(f"   🗣️  Languages: {args.source_lang} → {args.target_lang}")
+        # FOCUSED: Only log critical parameters
+        logger.info(f"� SeamlessStreaming config: {src_lang}→{tgt_lang}, min_wait={args.min_starting_wait_w2vbert}, threshold={args.decision_threshold}, chunk_size={args.min_unit_chunk_size}")
         
         return args
         
@@ -210,22 +189,16 @@ class OfficialStreamingTranslator:
             src_lang = src_lang or self.source_lang
             tgt_lang = tgt_lang or self.target_lang
             
-            logger.info(f"Initializing official SeamlessStreaming agent for {task}: {src_lang} → {tgt_lang}")
+            logger.info(f"🔧 Initializing SeamlessStreaming: {src_lang}→{tgt_lang}")
             
             # Configure agent arguments with all required parameters
             args = self._create_official_args(task, src_lang, tgt_lang)
             self.args = args  # Store for test access
             
-            # Debug: Check language parameters before agent creation
-            logger.info(f"🔍 Debug language params: src_lang='{src_lang}', tgt_lang='{tgt_lang}'")
-            logger.info(f"🔍 Args language params: args.tgt_lang='{args.tgt_lang}', args.target_lang='{args.target_lang}'")
-            
             # Initialize the streaming agent with proper configuration
-            logger.info("🔧 Creating SeamlessStreamingS2STAgent...")
             self.agent = SeamlessStreamingS2STAgent(args)
             
-            logger.info("✅ Official SeamlessStreaming agent initialized successfully!")
-            logger.info("🎯 Agent is ready for streaming translation")
+            logger.info("✅ Agent initialized and ready")
             
             self.initialized = True
             return True
@@ -242,20 +215,15 @@ class OfficialStreamingTranslator:
         self.audio_accumulator = []
         self.total_samples = 0
         self.last_chunk_time = None
-        logger.info("🔄 Audio accumulator reset")
     
     async def translate_stream(self, audio_chunk: bytes) -> Optional[bytes]:
         """Process audio chunk and return translated audio if available"""
         if not self.initialized or not self.agent:
-            logger.warning("⚠️  Agent not initialized")
             return None
             
         try:
-            logger.info(f"🔄 Processing audio chunk: {len(audio_chunk)} bytes")
-            
             # Convert audio bytes to int16 array (frontend sends int16 PCM)
             audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
-            logger.info(f"📊 Converted to {len(audio_np)} audio samples")
             
             # Convert to float32 and normalize
             audio_float = audio_np.astype(np.float32) / 32768.0
@@ -263,7 +231,7 @@ class OfficialStreamingTranslator:
             # Initialize agent states if this is the first chunk
             if not hasattr(self, 'agent_states') or self.agent_states is None:
                 self.agent_states = self.agent.build_states()
-                logger.info(f"🏗️ Built agent states: {type(self.agent_states)}")
+                logger.info(f"🏗️ First chunk - built states: {type(self.agent_states)}")
                 
                 # Initialize audio accumulator for streaming
                 self.audio_accumulator = []
@@ -274,20 +242,12 @@ class OfficialStreamingTranslator:
             self.total_samples += len(audio_float)
             current_time = time.time()
             
-            logger.info(f"📈 Total accumulated samples: {self.total_samples}")
-            
             # Determine if segment should be marked as finished
-            # More responsive finishing with updated parameters
             time_based_finish = (self.last_chunk_time and 
                                (current_time - self.last_chunk_time) > 1.0)
             sample_based_finish = self.total_samples >= 16384  # Finish at 1 second of audio
-            chunk_based_finish = (self.total_samples >= 16384) and (self.total_samples % 16384 == 0)
-            # Force finish after accumulating enough for processing
             force_finish = self.total_samples >= 24576  # 1.5 seconds of audio
-            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish or force_finish
-            
-            if segment_finished:
-                logger.info(f"🏁 Marking segment as finished (samples: {self.total_samples}, time_gap: {time_based_finish})")
+            segment_finished = time_based_finish or sample_based_finish or force_finish
             
             # Create speech segment with accumulated audio
             segment = SpeechSegment(
@@ -298,92 +258,50 @@ class OfficialStreamingTranslator:
             
             self.last_chunk_time = current_time
             
-            logger.info(f"🎤 Created speech segment with {len(self.audio_accumulator)} samples")
-            
             # Process with the streaming agent
             try:
-                # Handle list states (pipeline agents)
+                # Update states with current segment
                 if isinstance(self.agent_states, list):
-                    logger.info(f"📋 Using pipeline agent approach with {len(self.agent_states)} states")
-                    # Debug: Log pipeline structure
-                    for i, state in enumerate(self.agent_states):
-                        logger.info(f"  State {i}: {type(state).__name__}")
-                        if hasattr(state, '__dict__'):
-                            state_attrs = [attr for attr in dir(state) if not attr.startswith('_')]
-                            logger.info(f"    Available attributes: {state_attrs[:10]}...")  # Show first 10
-                    
-                    # For pipeline agents, update each state in the list
-                    for i, state in enumerate(self.agent_states):
+                    # Pipeline agents - update each state
+                    for state in enumerate(self.agent_states):
                         if hasattr(state, 'source'):
-                            logger.info(f"  Updating state {i} source with segment (finished={segment_finished})")
                             state.source = [segment]
-                            state.source_finished = segment_finished  # Use our calculated finish state
+                            state.source_finished = segment_finished
                         if hasattr(state, 'tgt_lang'):
                             state.tgt_lang = self.target_lang
-                        # Additional state updates for different agent types
                         if hasattr(state, 'target_lang'):
                             state.target_lang = self.target_lang
                         if hasattr(state, 'finished'):
                             state.finished = segment_finished
-                        
-                        # Debug: Check target/output state of each pipeline stage
-                        if hasattr(state, 'target') and state.target:
-                            logger.info(f"    State {i} has target output: {len(state.target)} items")
-                        if hasattr(state, 'source') and state.source:
-                            logger.info(f"    State {i} source length: {len(state.source)} items")
-                    
-                    # Get action from the pipeline
-                    logger.info("🔄 Calling agent.policy()...")
                     action = self.agent.policy(self.agent_states)
                 else:
-                    logger.info("🔧 Using single agent approach")
-                    # Single agent - update states
-                    logger.info(f"  Agent state type: {type(self.agent_states).__name__}")
+                    # Single agent
                     self.agent_states.source = [segment]
-                    self.agent_states.source_finished = segment_finished  # Use our calculated finish state
+                    self.agent_states.source_finished = segment_finished
                     if hasattr(self.agent_states, 'tgt_lang'):
                         self.agent_states.tgt_lang = self.target_lang
                     if hasattr(self.agent_states, 'target_lang'):
                         self.agent_states.target_lang = self.target_lang
                     if hasattr(self.agent_states, 'finished'):
                         self.agent_states.finished = segment_finished
-                    
-                    logger.info("🔄 Calling agent.policy()...")
                     action = self.agent.policy(self.agent_states)
                 
-                logger.info(f"🤖 Agent returned action: {type(action)}")
-                
-                # Handle None actions (normal during accumulation phase)
+                # FOCUS: Only log critical translation results
                 if action is None:
-                    logger.info("⏳ Agent still accumulating audio - no translation yet")
-                    # If we're forcing segment finishing but still getting None, there might be a deeper issue
                     if segment_finished:
-                        logger.warning("⚠️ Segment marked as FINISHED but agent still returned None!")
-                        logger.warning("   This suggests the agent needs more setup or different parameters")
+                        logger.warning(f"❌ PROBLEM: Segment FINISHED ({self.total_samples} samples) but agent returned None!")
+                        logger.warning(f"   Parameters: min_wait={getattr(self.args, 'min_starting_wait_w2vbert', 'unknown')}, threshold={getattr(self.args, 'decision_threshold', 'unknown')}")
                     return None
                 
-                # Debug action details
-                logger.info(f"✅ Action is not None! Type: {action.__class__.__module__}.{action.__class__.__name__}")
-                if hasattr(action, '__dict__'):
-                    action_attrs = {k: v for k, v in action.__dict__.items()}
-                    logger.info(f"🔍 Action attributes: {list(action_attrs.keys())}")
-                    for key, value in action_attrs.items():
-                        if key == 'content' and value is not None:
-                            logger.info(f"  {key}: {type(value)} (length: {len(value) if hasattr(value, '__len__') else 'N/A'})")
-                        else:
-                            logger.info(f"  {key}: {value}")
-                else:
-                    logger.info("🔍 Action has no __dict__ attribute")
+                # FOCUS: Log successful translation only
+                logger.info(f"✅ Got action: {action.__class__.__name__}")
                 
                 # Check if action is a ReadAction (needs more input)
                 if hasattr(action, '__class__') and 'Read' in action.__class__.__name__:
-                    logger.info("📖 Agent requesting more input (ReadAction)")
                     return None
                 
                 # Check for WriteAction with content
                 if hasattr(action, 'content') and action.content is not None:
-                    logger.info(f"✍️ Agent produced content: {type(action.content)}")
-                    
                     # For s2st, action.content should be audio samples
                     if isinstance(action.content, (list, np.ndarray)):
                         # Convert audio samples to int16 PCM bytes
@@ -396,7 +314,7 @@ class OfficialStreamingTranslator:
                         audio_samples = np.clip(audio_samples, -1.0, 1.0)
                         audio_int16 = (audio_samples * 32767).astype(np.int16)
                         
-                        logger.info(f"🔊 Generated audio translation: {len(audio_int16)} samples")
+                        logger.info(f"🎉 SUCCESS! Generated {len(audio_int16)} audio samples")
                         
                         # Clear accumulator after successful translation
                         self.audio_accumulator = []
@@ -404,15 +322,13 @@ class OfficialStreamingTranslator:
                         
                         return audio_int16.tobytes()
                     else:
-                        logger.warning(f"⚠️ Unexpected audio content type: {type(action.content)}")
+                        logger.warning(f"⚠️ Unexpected content type: {type(action.content)}")
                 
                 # Check for text content (in case of s2t mode)
                 if hasattr(action, 'content') and isinstance(action.content, str):
-                    logger.info(f"📝 Agent produced text: {action.content}")
-                    # For now, we don't return text in s2st mode
+                    logger.info(f"📝 Got text: {action.content}")
                     return None
                 
-                logger.info("🔍 Action has no usable content")
                 return None
                 
             except Exception as policy_error:
@@ -446,20 +362,18 @@ class StreamingSession:
         self.tgt_lang = tgt_lang
         self.task = task
         
-        logger.info(f"🎬 Initializing session {self.session_id}")
-        logger.info(f"🗣️  Task: {task}, Languages: {src_lang} → {tgt_lang}")
+        logger.info(f"🎬 New session: {src_lang}→{tgt_lang}")
         
         # Initialize official translator
         success = await self.official_translator.initialize(task, src_lang, tgt_lang)
         
         if success:
-            # Reset accumulator for new session
             self.official_translator.reset_accumulator()
             self.is_active = True
-            logger.info(f"✅ Session {self.session_id} ready with official SeamlessStreaming")
+            logger.info(f"✅ Session ready")
             return True
         else:
-            logger.error(f"❌ Session {self.session_id} failed to initialize")
+            logger.error(f"❌ Session failed to initialize")
             return False
     
     async def process_audio(self, audio_chunk: bytes) -> Optional[bytes]:
@@ -470,21 +384,15 @@ class StreamingSession:
         try:
             # Process with official translator
             result = await self.official_translator.translate_stream(audio_chunk)
-            
-            if result:
-                logger.info(f"📤 Session {self.session_id} audio translation: {len(result)} bytes")
-                return result
-                
-            return None
+            return result
             
         except Exception as e:
-            logger.error(f"❌ Session {self.session_id} processing error: {e}")
+            logger.error(f"❌ Processing error: {e}")
             return None
     
     def close(self):
         """Close the streaming session"""
         self.is_active = False
-        logger.info(f"🔚 Session {self.session_id} closed")
 
 
 # Session manager
@@ -514,8 +422,6 @@ async def websocket_endpoint(websocket: WebSocket):
     session = StreamingSession(session_id)
     sessions[session_id] = session
     
-    logger.info(f"🔌 New WebSocket connection: {session_id}")
-    
     try:
         # Wait for initialization message
         init_data = await websocket.receive_json()
@@ -541,17 +447,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     if "bytes" in data:
                         # Process audio data
                         audio_data = data["bytes"]
-                        logger.info(f"📥 Received audio data: {len(audio_data)} bytes")
                         
                         try:
                             result = await session.process_audio(audio_data)
                             
                             if result:
-                                logger.info(f"📤 Sending audio response: {len(result)} bytes")
                                 # Send translated audio as binary data
                                 await websocket.send_bytes(result)
-                            else:
-                                logger.warning("⚠️ No translation result from agent")
                         except Exception as process_error:
                             logger.error(f"❌ Audio processing error: {process_error}")
                             # Continue processing instead of breaking the connection
@@ -570,16 +472,14 @@ async def websocket_endpoint(websocket: WebSocket):
                             # Respond to heartbeat ping with pong
                             try:
                                 await websocket.send_json({"type": "pong"})
-                                logger.debug(f"💓 Pong sent to {session_id}")
                             except Exception as ping_error:
-                                logger.error(f"❌ Failed to send pong to {session_id}: {ping_error}")
+                                logger.error(f"❌ Failed to send pong: {ping_error}")
                         elif json_data.get("type") == "stop_stream":
-                            logger.info(f"⏹️ Stop stream requested for {session_id}")
                             # Don't break, just acknowledge
                             try:
                                 await websocket.send_json({"type": "stream_stopped"})
                             except Exception as stop_error:
-                                logger.error(f"❌ Failed to send stream_stopped to {session_id}: {stop_error}")
+                                logger.error(f"❌ Failed to send stream_stopped: {stop_error}")
                             
                 except WebSocketDisconnect:
                     logger.info(f"🔌 WebSocket disconnected: {session_id}")

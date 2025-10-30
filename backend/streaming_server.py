@@ -277,14 +277,14 @@ class OfficialStreamingTranslator:
             logger.info(f"📈 Total accumulated samples: {self.total_samples}")
             
             # Determine if segment should be marked as finished
-            # Mark as finished more aggressively to force translation output
-            # Try shorter thresholds: 1.5 seconds or 24000 samples (1.5 sec * 16kHz)
+            # TESTING: Force finishing to debug pipeline behavior
             time_based_finish = (self.last_chunk_time and 
-                               (current_time - self.last_chunk_time) > 1.5)
-            sample_based_finish = self.total_samples >= 24000
-            # Also mark as finished every 10th chunk to force periodic output
-            chunk_based_finish = (self.total_samples % 16384) == 0 and self.total_samples > 16384
-            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish
+                               (current_time - self.last_chunk_time) > 1.0)
+            sample_based_finish = self.total_samples >= 16384  # Finish at 1 second of audio
+            chunk_based_finish = (self.total_samples >= 16384) and (self.total_samples % 16384 == 0)
+            # TEST: Force every segment to be finished to see if pipeline works at all
+            force_finish_test = True  # TEMPORARY: Always mark as finished for testing
+            segment_finished = time_based_finish or sample_based_finish or chunk_based_finish or force_finish_test
             
             if segment_finished:
                 logger.info(f"🏁 Marking segment as finished (samples: {self.total_samples}, time_gap: {time_based_finish})")

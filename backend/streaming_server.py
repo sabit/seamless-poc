@@ -268,13 +268,25 @@ class OfficialStreamingTranslator:
             
             # Process with the streaming agent
             try:
-                # Update states with current segment
+                # Update states with current segment - PROPER PIPELINE MANAGEMENT
                 if isinstance(self.agent_states, list):
-                    # Pipeline agents - update each state
-                    for i, state in enumerate(self.agent_states):  # FIXED: was using enumerate wrong
-                        if hasattr(state, 'source'):
-                            state.source = [segment]
-                            state.source_finished = segment_finished
+                    # Pipeline agents - ONLY update the FIRST state (FeatureStates) with audio
+                    # The pipeline should flow: FeatureStates -> AgentStates -> ... -> AgentStates
+                    
+                    # Update only the first state (FeatureStates) with new audio segment
+                    first_state = self.agent_states[0]
+                    if hasattr(first_state, 'source'):
+                        first_state.source = [segment]
+                        first_state.source_finished = segment_finished
+                    if hasattr(first_state, 'tgt_lang'):
+                        first_state.tgt_lang = self.target_lang
+                    if hasattr(first_state, 'target_lang'):
+                        first_state.target_lang = self.target_lang
+                    if hasattr(first_state, 'finished'):
+                        first_state.finished = segment_finished
+                    
+                    # Set language parameters on all states
+                    for i, state in enumerate(self.agent_states):
                         if hasattr(state, 'tgt_lang'):
                             state.tgt_lang = self.target_lang
                         if hasattr(state, 'target_lang'):
@@ -282,11 +294,23 @@ class OfficialStreamingTranslator:
                         if hasattr(state, 'finished'):
                             state.finished = segment_finished
                         
-                        # DEBUG: Log state updates for first few segments
+                        # DEBUG: Log state info for first few segments
                         if self.total_samples < 50000:
-                            logger.info(f"🔧 Updated state {i}: source={len(state.source) if hasattr(state, 'source') and state.source else 0}, finished={segment_finished}")
+                            source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
+                            target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
+                            logger.info(f"🔧 State {i}: source={source_len}, target={target_len}, finished={segment_finished}")
                     
+                    # Call agent.policy() and check intermediate pipeline results
                     action = self.agent.policy(self.agent_states)
+                    
+                    # DEBUG: After policy call, check if pipeline has processed data
+                    if self.total_samples < 50000 and segment_finished:
+                        logger.info("🔍 POST-POLICY pipeline state:")
+                        for i, state in enumerate(self.agent_states):
+                            source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
+                            target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
+                            logger.info(f"   State {i}: source={source_len}, target={target_len}")
+                    
                 else:
                     # Single agent
                     self.agent_states.source = [segment]

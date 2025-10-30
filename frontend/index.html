@@ -599,6 +599,12 @@
                     const arrayBuffer = await audioBlob.arrayBuffer();
                     console.log('📤 Converted to ArrayBuffer:', arrayBuffer.byteLength, 'bytes');
                     
+                    // Create a simple hash of the audio data to verify uniqueness
+                    const audioHash = Array.from(new Uint8Array(arrayBuffer.slice(0, 100)))
+                        .map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
+                    console.log('🔍 Audio fingerprint (first 100 bytes):', audioHash);
+                    console.log('🎯 Session ID for this audio:', this.currentSessionId);
+                    
                     // Verify WebSocket is still open
                     if (this.websocket.readyState !== WebSocket.OPEN) {
                         console.error('❌ WebSocket not open, state:', this.websocket.readyState);

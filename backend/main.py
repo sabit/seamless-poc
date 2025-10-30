@@ -16,6 +16,8 @@ import io
 import wave
 import tempfile
 import os
+import hashlib
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -181,6 +183,11 @@ class SeamlessTranslator:
         try:
             logger.info(f"Translating tensor: {waveform.shape} samples, {src_lang} -> {tgt_lang}")
             
+            # Add input validation
+            if len(waveform) < sample_rate * 0.1:  # Less than 0.1 seconds
+                logger.warning("Audio too short for reliable translation")
+                return None
+                
             # Process audio with the model
             inputs = self.processor(
                 audio=waveform,
@@ -193,10 +200,20 @@ class SeamlessTranslator:
             logger.info(f"Input keys: {list(inputs.keys())}")
             logger.info(f"Input shapes: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in inputs.items()]}")
             
-            # Generate speech translation (based on HuggingFace docs)
+            # Generate speech translation with some randomization to reduce identical outputs
             with torch.no_grad():
-                # According to docs: model.generate() returns audio array directly for speech-to-speech
-                audio_array = self.model.generate(**inputs, tgt_lang=tgt_lang)
+                # Set a different random seed for each translation to ensure variation
+                torch.manual_seed(int(time.time() * 1000000) % 2**32)
+                
+                # Add some randomness to reduce identical outputs for similar inputs
+                audio_array = self.model.generate(
+                    **inputs, 
+                    tgt_lang=tgt_lang,
+                    do_sample=True,  # Enable sampling for more variation
+                    temperature=0.8,  # Add some randomness (increased from 0.7)
+                    num_beams=1,  # Use sampling instead of beam search
+                    pad_token_id=self.processor.tokenizer.pad_token_id
+                )
             
             logger.info(f"Generated audio type: {type(audio_array)}, shape: {audio_array.shape if hasattr(audio_array, 'shape') else 'no shape'}")
             
@@ -269,7 +286,7 @@ async def health_check():
 
 @app.websocket("/ws/translate")
 async def websocket_translate(websocket: WebSocket):
-    """WebSocket endpoint for real-time speech translation - browser compatible"""
+    """WebSocket endpoint for complete recording speech translation"""
     await websocket.accept()
     
     try:
@@ -292,34 +309,57 @@ async def websocket_translate(websocket: WebSocket):
         # Send ready confirmation
         await websocket.send_text('{"type":"ready"}')
         
-        # Process audio chunks in real-time
+        # Process complete audio recordings (not chunks)
         while True:
             message = await websocket.receive()
             
             if "bytes" in message:
-                # Handle browser audio data (WebM/WAV format)
+                # Handle complete audio recording from browser
                 audio_bytes = message["bytes"]
-                logger.info(f"Received audio: {len(audio_bytes)} bytes, format signature: {audio_bytes[:12]}")
+                logger.info(f"Received complete recording: {len(audio_bytes)} bytes, format signature: {audio_bytes[:12]}")
                 
-                # Convert audio bytes to tensor using our robust format detection
-                waveform = translator.audio_bytes_to_tensor(audio_bytes, sample_rate)
-                
-                if waveform is not None:
-                    # Translate speech
-                    try:
-                        translated_audio = await translator.translate_speech_tensor(waveform, src_lang, tgt_lang, sample_rate)
+                # Only process if we have substantial audio data (> 1KB to filter out noise)
+                if len(audio_bytes) > 1000:
+                    # Generate audio fingerprint for debugging
+                    audio_hash = hashlib.md5(audio_bytes).hexdigest()[:8]
+                    timestamp = int(time.time() * 1000)
+                    
+                    logger.info(f"Processing audio hash: {audio_hash}, timestamp: {timestamp}")
+                    
+                    # Convert audio bytes to tensor using our robust format detection
+                    waveform = translator.audio_bytes_to_tensor(audio_bytes, sample_rate)
+                    
+                    if waveform is not None and len(waveform) > sample_rate * 0.5:  # At least 0.5 seconds
+                        # Log audio characteristics for debugging
+                        audio_stats = {
+                            'duration': len(waveform) / sample_rate,
+                            'rms': float(np.sqrt(np.mean(waveform.cpu().numpy()**2))),
+                            'max_amplitude': float(torch.max(torch.abs(waveform)))
+                        }
+                        logger.info(f"Audio stats for {audio_hash}: {audio_stats}")
                         
-                        if translated_audio is not None:
-                            # Send back as PCM bytes 
-                            await websocket.send_bytes(translated_audio)
-                            logger.info(f"Sent translated audio: {len(translated_audio)} bytes")
-                        else:
-                            logger.warning("Translation returned None")
+                        # Translate speech
+                        try:
+                            logger.info(f"Processing complete recording: {len(waveform)} samples ({len(waveform)/sample_rate:.2f} seconds)")
+                            translated_audio = await translator.translate_speech_tensor(waveform, src_lang, tgt_lang, sample_rate)
                             
-                    except Exception as e:
-                        logger.error(f"Translation error: {e}")
+                            if translated_audio is not None:
+                                # Generate output fingerprint for debugging
+                                output_hash = hashlib.md5(translated_audio).hexdigest()[:8]
+                                logger.info(f"Generated translation {audio_hash} -> {output_hash}: {len(translated_audio)} bytes")
+                                
+                                # Send back as PCM bytes 
+                                await websocket.send_bytes(translated_audio)
+                                logger.info(f"Sent translated audio: {len(translated_audio)} bytes")
+                            else:
+                                logger.warning("Translation returned None")
+                                
+                        except Exception as e:
+                            logger.error(f"Translation error: {e}")
+                    else:
+                        logger.info("Skipping short/invalid audio recording")
                 else:
-                    logger.error("Failed to convert audio bytes to tensor")
+                    logger.info("Skipping small audio chunk (likely noise)")
                     
             elif "text" in message:
                 # Handle control messages

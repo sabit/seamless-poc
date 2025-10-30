@@ -302,84 +302,50 @@ class OfficialStreamingTranslator:
             frequent_finish = self.total_samples >= 4000  # Very aggressive - 0.25s
             segment_finished = time_based_finish or sample_based_finish or force_finish or frequent_finish
             
-            # Create speech segment with accumulated audio
-            segment = SpeechSegment(
-                content=np.array(self.audio_accumulator, dtype=np.float32),
-                sample_rate=16000,
-                finished=segment_finished
-            )
+            # Create properly formatted audio segment
+            audio_array = np.array(self.audio_accumulator, dtype=np.float32)
             
             self.last_chunk_time = current_time
             
             # Process with the streaming agent
             try:
-                # CRITICAL FIX: Use agent.pop() method for proper pipeline processing
-                # Based on SeamlessStreaming research: UnitYAgentPipeline.pop() handles sequential processing
+                # PROPER FIX: Use correct SeamlessStreaming pattern from official evaluation
+                # Based on research: SimulEval agents expect SpeechSegment input and return Actions
                 
-                # Create proper SpeechSegment from audio data
+                # Create SpeechSegment from audio data (this is the standard format)
                 speech_segment = SpeechSegment(
-                    content=segment,
+                    content=audio_array,  # Raw audio samples (numpy array)
+                    sample_rate=16000,
                     finished=segment_finished,
                     tgt_lang=self.target_lang
                 )
                 
-                logger.info(f"📥 PIPELINE INPUT: {len(segment)} samples, finished={segment_finished}")
+                logger.info(f"📥 INPUT: {len(audio_array)} samples, finished={segment_finished}")
                 
-                # Method 1: Try proper pipeline processing with push/pop
-                try:
-                    # Push segment to agent and get processed output
-                    self.agent.pushback([speech_segment])
-                    output_segment = self.agent.pop(self.agent_states if isinstance(self.agent_states, list) else None)
+                # Standard approach: Update agent states with speech segment  
+                if isinstance(self.agent_states, list):
+                    # Pipeline agent: Update first state (OnlineFeatureExtractorAgent)
+                    first_state = self.agent_states[0]
                     
-                    # Convert to action format
-                    if output_segment and hasattr(output_segment, 'content') and output_segment.content:
-                        action = WriteAction(output_segment.content, finished=getattr(output_segment, 'finished', segment_finished))
-                        logger.info(f"✅ PIPELINE OUTPUT: {type(output_segment.content)}")
-                    else:
-                        action = None
-                        logger.info("🔄 Pipeline processing - no output yet")
-                
-                except Exception as push_error:
-                    logger.warning(f"⚠️ Push/pop method failed: {push_error}")
+                    # Update source with new speech segment
+                    if not hasattr(first_state, 'source'):
+                        first_state.source = []
+                    first_state.source.append(speech_segment)
+                    first_state.source_finished = segment_finished
                     
-                    # Method 2: Fallback to direct state update + pop
-                    try:
-                        if isinstance(self.agent_states, list):
-                            # Update first agent state with audio input
-                            first_state = self.agent_states[0]
-                            if not hasattr(first_state, 'source'):
-                                first_state.source = []
-                            first_state.source.append(segment)
-                            first_state.source_finished = segment_finished
-                            if hasattr(first_state, 'tgt_lang'):
-                                first_state.tgt_lang = self.target_lang
-                        else:
-                            # Single agent state
-                            if not hasattr(self.agent_states, 'source'):
-                                self.agent_states.source = []
-                            self.agent_states.source.append(segment) 
-                            self.agent_states.source_finished = segment_finished
-                            if hasattr(self.agent_states, 'tgt_lang'):
-                                self.agent_states.tgt_lang = self.target_lang
-                        
-                        # Use pop() method for pipeline processing
-                        output_segment = self.agent.pop(self.agent_states if isinstance(self.agent_states, list) else None)
-                        
-                        if output_segment and hasattr(output_segment, 'content') and output_segment.content:
-                            action = WriteAction(output_segment.content, finished=getattr(output_segment, 'finished', segment_finished))
-                            logger.info(f"✅ FALLBACK OUTPUT: {type(output_segment.content)}")
-                        else:
-                            action = None
-                            logger.info("🔄 Fallback processing - no output yet")
+                    # Process through agent policy - this handles the pipeline internally
+                    action = self.agent.policy(first_state)
+                    logger.info(f"🔧 Pipeline processed via first state policy")
                     
-                    except Exception as pop_error:
-                        logger.error(f"❌ Pop method also failed: {pop_error}")
-                        
-                        # Method 3: Last resort - manual policy call
-                        if isinstance(self.agent_states, list):
-                            action = self.agent.policy(self.agent_states[0])
-                        else:
-                            action = self.agent.policy(self.agent_states)
+                else:
+                    # Single agent: Update state directly
+                    if not hasattr(self.agent_states, 'source'):
+                        self.agent_states.source = []
+                    self.agent_states.source.append(speech_segment)
+                    self.agent_states.source_finished = segment_finished
+                    
+                    action = self.agent.policy(self.agent_states)
+                    logger.info(f"🔧 Single agent processed via policy")
                 
                 # FOCUS: Only log critical translation results
                 if action is None:
@@ -508,6 +474,24 @@ class StreamingSession:
 
 # Session manager
 sessions: Dict[str, StreamingSession] = {}
+
+# Compatibility class for testing imports
+class SeamlessStreamingServer:
+    """Compatibility class for import testing"""
+    def __init__(self, source_lang="eng", target_lang="ben", task="s2st"):
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        self.task = task
+        self.translator = None
+        
+    def init_agent(self):
+        """Initialize the translation agent"""
+        self.translator = OfficialStreamingTranslator(
+            self.source_lang, 
+            self.target_lang, 
+            self.task
+        )
+        return self.translator.init_agent()
 
 # FastAPI app setup
 app = FastAPI(title="SeamlessStreaming API", version="1.0.0")

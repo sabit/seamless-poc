@@ -11,7 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
-from transformers import SeamlessM4Tv2Model, SeamlessM4TProcessor
+from transformers import SeamlessM4Tv2ForSpeechToSpeech, SeamlessM4TProcessor
 import io
 import wave
 import tempfile
@@ -43,7 +43,7 @@ class SeamlessTranslator:
         """Initialize the model asynchronously"""
         try:
             logger.info("Loading SeamlessM4T model...")
-            self.model = SeamlessM4Tv2Model.from_pretrained(
+            self.model = SeamlessM4Tv2ForSpeechToSpeech.from_pretrained(
                 "facebook/seamless-m4t-v2-large",
                 dtype=torch.float16 if self.device == "cuda" else torch.float32
             ).to(self.device)
@@ -189,25 +189,34 @@ class SeamlessTranslator:
                 return_tensors="pt"
             ).to(self.device)
             
-            # Generate speech translation
+            # Debug: Check what we're sending to the model
+            logger.info(f"Input keys: {list(inputs.keys())}")
+            logger.info(f"Input shapes: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in inputs.items()]}")
+            
+            # Generate speech translation (based on HuggingFace docs)
             with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    tgt_lang=tgt_lang,
-                    generate_speech=True
-                )
+                # According to docs: model.generate() returns audio array directly for speech-to-speech
+                audio_array = self.model.generate(**inputs, tgt_lang=tgt_lang)
             
-            # Convert output to PCM bytes (like echo server)
-            if hasattr(outputs, 'waveform') and outputs.waveform is not None:
-                return self.tensor_to_pcm_bytes(outputs.waveform.squeeze())
-            elif 'waveform' in outputs:
-                return self.tensor_to_pcm_bytes(outputs['waveform'].squeeze())
+            logger.info(f"Generated audio type: {type(audio_array)}, shape: {audio_array.shape if hasattr(audio_array, 'shape') else 'no shape'}")
             
-            logger.warning("No waveform output from model")
-            return None
+            # The model returns audio tensor directly (according to docs)
+            if isinstance(audio_array, torch.Tensor):
+                # Convert tensor to PCM bytes for browser playback
+                return self.tensor_to_pcm_bytes(audio_array.squeeze())
+            elif isinstance(audio_array, (list, tuple)) and len(audio_array) > 0:
+                # Handle case where it returns list/tuple with tensor
+                audio_tensor = audio_array[0] if hasattr(audio_array[0], 'shape') else audio_array
+                logger.info(f"Using first element: {type(audio_tensor)}, shape: {audio_tensor.shape}")
+                return self.tensor_to_pcm_bytes(audio_tensor.squeeze())
+            else:
+                logger.error(f"Unexpected output type from model: {type(audio_array)}")
+                return None
             
         except Exception as e:
             logger.error(f"Translation error: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     async def translate_speech(self, audio_bytes: bytes, src_lang: str, tgt_lang: str, sample_rate: int = 16000):

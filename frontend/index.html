@@ -290,16 +290,25 @@
                     try {
                         if (!this.audioContext) {
                             console.log('🎵 Creating AudioContext for user interaction...');
-                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                                sampleRate: 16000
-                            });
+                            // Don't force 16kHz - let browser use native sample rate for better compatibility
+                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                         }
                         
                         console.log('🎵 AudioContext state before resume:', this.audioContext.state);
+                        console.log('🎵 AudioContext sample rate:', this.audioContext.sampleRate);
+                        
                         if (this.audioContext.state === 'suspended') {
                             await this.audioContext.resume();
                             console.log('✅ AudioContext resumed from user interaction');
                         }
+                        
+                        // Test audio capability
+                        const testBuffer = this.audioContext.createBuffer(1, 1024, this.audioContext.sampleRate);
+                        const testSource = this.audioContext.createBufferSource();
+                        testSource.buffer = testBuffer;
+                        testSource.connect(this.audioContext.destination);
+                        testSource.start();
+                        testSource.stop();
                         
                         audioEnabled = true;
                         console.log('🎉 Audio playback fully enabled!');
@@ -365,6 +374,11 @@
                 
                 // Initial UI state
                 this.updateUIForMode();
+                
+                // Initialize streaming mode from page load
+                const initialMode = document.querySelector('input[name="mode"]:checked')?.value || 'complete';
+                this.streamingMode = initialMode;
+                console.log('🚀 Initial mode set to:', this.streamingMode);
             }
             
             updateUIForMode() {
@@ -380,6 +394,12 @@
             }
             
             connectWebSocket() {
+                // Close existing connection if any
+                if (this.websocket && this.websocket.readyState !== WebSocket.CLOSED) {
+                    console.log('🔌 Closing existing WebSocket connection');
+                    this.websocket.close();
+                }
+                
                 const wsUrl = this.streamingMode === 'streaming' ? 
                     'wss://34.81.26.139:7860/ws/stream' : 
                     'wss://34.81.26.139:7860/ws/translate';
@@ -440,13 +460,9 @@
                             console.error('❌ Failed to parse server message:', e, 'Raw data:', event.data);
                         }
                     } else {
-                        // Handle binary audio data (raw PCM)
-                        if (!this.isRecording || this.isStreaming) {
-                            console.log('🎵 Binary audio data received for playback');
-                            this.playTranslatedAudio(event.data);
-                        } else {
-                            console.log('🔇 Ignoring audio response during active recording');
-                        }
+                        // Handle binary audio data (raw PCM) - always try to play
+                        console.log('🎵 Binary audio data received for playback, streaming mode:', this.streamingMode);
+                        this.playTranslatedAudio(event.data);
                     }
                 };
                 

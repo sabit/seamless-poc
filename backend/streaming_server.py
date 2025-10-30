@@ -136,6 +136,10 @@ class OfficialStreamingTranslator:
         args.tgt_lang = tgt_lang  # Alternative naming for compatibility
         args.task = task
         
+        # Text decoder specific language parameters
+        args.lang_pairs = f"{src_lang}-{tgt_lang}"  # Language pair specification
+        args.target_language = tgt_lang  # Additional target language parameter
+        
         # Streaming configuration parameters
         args.min_unit_chunk_size = 50  # Minimum number of units to accumulate
         args.d_factor = 1.0  # Duration factor for timing
@@ -197,6 +201,10 @@ class OfficialStreamingTranslator:
             # Configure agent arguments with all required parameters
             args = self._create_official_args(task, src_lang, tgt_lang)
             self.args = args  # Store for test access
+            
+            # Debug: Check language parameters before agent creation
+            logger.info(f"🔍 Debug language params: src_lang='{src_lang}', tgt_lang='{tgt_lang}'")
+            logger.info(f"🔍 Args language params: args.tgt_lang='{args.tgt_lang}', args.target_lang='{args.target_lang}'")
             
             # Initialize the streaming agent with proper configuration
             logger.info("🔧 Creating SeamlessStreamingS2STAgent...")

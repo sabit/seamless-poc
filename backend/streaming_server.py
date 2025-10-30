@@ -104,6 +104,7 @@ class OfficialStreamingTranslator:
         # Audio accumulation for streaming
         self.audio_accumulator = []
         self.total_samples = 0
+        self.last_chunk_time = None
         
         # Auto-initialize if requested (useful for testing)
         if auto_init:
@@ -146,18 +147,19 @@ class OfficialStreamingTranslator:
         args.lang_pairs = f"{src_lang}-{tgt_lang}"  # Language pair specification
         args.target_language = tgt_lang  # Additional target language parameter
         
-        # Streaming configuration parameters
+        # Streaming configuration parameters (optimized from research)
         args.min_unit_chunk_size = 50  # Minimum number of units to accumulate
+        args.source_segment_size = 320  # Critical: segment size from research
         args.d_factor = 1.0  # Duration factor for timing
         args.shift_size = 160  # Audio frame shift size
         args.segment_size = 2000  # Audio segment size
         args.window_size = 2000  # Feature extraction window size
         args.feature_dim = 80  # Feature dimension (e.g., mel-spectrogram features)
-        args.min_starting_wait_w2vbert = 1000  # Minimum wait for w2v-BERT encoder
+        args.min_starting_wait_w2vbert = 192  # FIXED: From research (was 1000)
         args.max_consecutive_write = 10  # Maximum consecutive writes for text decoder
         args.min_starting_wait = 1000  # Minimum starting wait for text decoder
         args.no_early_stop = False  # Disable early stopping for streaming
-        args.decision_threshold = 0.7  # Decision threshold for text decoder output
+        args.decision_threshold = 0.5  # FIXED: From research (was 0.7)
         args.decision_method = "threshold"  # Decision method for text decoder
         args.block_ngrams = False  # Block repeated n-grams in text generation
         args.p_choose_start_layer = 0  # Layer to start choosing from in decoder
@@ -239,6 +241,7 @@ class OfficialStreamingTranslator:
         """Reset audio accumulator for new session"""
         self.audio_accumulator = []
         self.total_samples = 0
+        self.last_chunk_time = None
         logger.info("🔄 Audio accumulator reset")
     
     async def translate_stream(self, audio_chunk: bytes) -> Optional[bytes]:
@@ -269,15 +272,28 @@ class OfficialStreamingTranslator:
             # Accumulate audio samples for streaming processing
             self.audio_accumulator.extend(audio_float)
             self.total_samples += len(audio_float)
+            current_time = time.time()
             
             logger.info(f"📈 Total accumulated samples: {self.total_samples}")
+            
+            # Determine if segment should be marked as finished
+            # Mark as finished after 3 seconds or 48000 samples (3 sec * 16kHz)
+            time_based_finish = (self.last_chunk_time and 
+                               (current_time - self.last_chunk_time) > 3.0)
+            sample_based_finish = self.total_samples >= 48000
+            segment_finished = time_based_finish or sample_based_finish
+            
+            if segment_finished:
+                logger.info(f"🏁 Marking segment as finished (samples: {self.total_samples}, time_gap: {time_based_finish})")
             
             # Create speech segment with accumulated audio
             segment = SpeechSegment(
                 content=np.array(self.audio_accumulator, dtype=np.float32),
                 sample_rate=16000,
-                finished=False  # Keep streaming
+                finished=segment_finished
             )
+            
+            self.last_chunk_time = current_time
             
             logger.info(f"🎤 Created speech segment with {len(self.audio_accumulator)} samples")
             

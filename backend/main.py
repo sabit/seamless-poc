@@ -70,10 +70,10 @@ class StreamingTranslator:
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.chunk_duration = 8.0  # Process chunks of 8 seconds for complete sentences
-        self.overlap_duration = 2.0  # 2 second overlap between chunks for continuity
+        self.chunk_duration = 4.0  # Process chunks of 4 seconds for reasonable response time
+        self.overlap_duration = 1.0  # 1 second overlap between chunks for continuity
         self.sample_rate = 16000
-        self.buffer = deque(maxlen=int(self.sample_rate * 30))  # 30 second circular buffer for more context
+        self.buffer = deque(maxlen=int(self.sample_rate * 20))  # 20 second circular buffer for more context
         logger.info(f"Using device: {self.device}")
         
     async def initialize(self):
@@ -98,19 +98,25 @@ class StreamingTranslator:
     
     def get_processing_chunk(self) -> Optional[np.ndarray]:
         """Get the next chunk for processing with overlap"""
-        if len(self.buffer) < int(self.sample_rate * self.chunk_duration):
+        required_samples = int(self.sample_rate * self.chunk_duration)
+        logger.info(f"Buffer check: {len(self.buffer)} samples available, {required_samples} required")
+        
+        if len(self.buffer) < required_samples:
             return None
         
-        chunk_samples = int(self.sample_rate * self.chunk_duration)
+        chunk_samples = required_samples
         # Take the most recent chunk for better real-time processing
         chunk = np.array(list(self.buffer)[-chunk_samples:])
         
         # Remove some samples to avoid reprocessing the same content
         samples_to_remove = int(self.sample_rate * (self.chunk_duration - self.overlap_duration))
+        logger.info(f"Removing {samples_to_remove} samples from buffer (keep {int(self.sample_rate * self.overlap_duration)} for overlap)")
+        
         for _ in range(min(samples_to_remove, len(self.buffer))):
             if len(self.buffer) > chunk_samples:  # Keep minimum buffer
                 self.buffer.popleft()
         
+        logger.info(f"Extracted chunk: {len(chunk)} samples, buffer now has {len(self.buffer)} samples")
         return chunk
     
     async def process_streaming_chunk(self, chunk: np.ndarray, src_lang: str, tgt_lang: str) -> Optional[bytes]:
@@ -118,14 +124,16 @@ class StreamingTranslator:
         try:
             # Check for minimum audio energy (avoid processing silence)
             audio_energy = np.sqrt(np.mean(chunk ** 2))
-            if audio_energy < 0.05:  # Higher threshold for silence detection
-                logger.debug("Skipping chunk with low audio energy (likely silence)")
+            logger.info(f"Audio energy check: {audio_energy:.4f} (threshold: 0.05)")
+            if audio_energy < 0.03:  # Lower threshold to allow more audio through
+                logger.info("Skipping chunk with low audio energy (likely silence)")
                 return None
             
             # Check for audio variety (avoid processing repetitive audio or noise)
             audio_variance = np.var(chunk)
-            if audio_variance < 0.01:  # Too uniform/repetitive
-                logger.debug("Skipping chunk with low variance (likely noise or repetitive)")
+            logger.info(f"Audio variance check: {audio_variance:.6f} (threshold: 0.01)")
+            if audio_variance < 0.005:  # Lower threshold to allow more audio through
+                logger.info("Skipping chunk with low variance (likely noise or repetitive)")
                 return None
             
             # Check for speech-like characteristics (frequency content)
@@ -133,10 +141,13 @@ class StreamingTranslator:
             chunk_segments = np.array_split(chunk, 10)  # Split into 10 segments
             segment_energies = [np.sqrt(np.mean(seg ** 2)) for seg in chunk_segments]
             energy_variance = np.var(segment_energies)
+            logger.info(f"Energy variance check: {energy_variance:.6f} (threshold: 0.001)")
             
-            if energy_variance < 0.001:  # Too uniform across time
-                logger.debug("Skipping chunk with uniform energy (likely not speech)")
+            if energy_variance < 0.0005:  # Lower threshold to allow more audio through
+                logger.info("Skipping chunk with uniform energy (likely not speech)")
                 return None
+            
+            logger.info("Audio quality checks passed - proceeding with translation")
             
             # Convert to tensor
             waveform = torch.from_numpy(chunk).float()
@@ -244,11 +255,11 @@ class StreamingSession:
         self.sample_rate = sample_rate
         self.running = False
         self.last_output_time = 0
-        self.min_output_interval = 4.0  # Minimum 4s between outputs for complete phrases
+        self.min_output_interval = 3.0  # Minimum 3s between outputs for complete phrases
         # Use streaming buffer management without creating new translator
-        self.buffer = deque(maxlen=int(sample_rate * 30))  # 30 second circular buffer
-        self.chunk_duration = 8.0  # Process chunks of 8 seconds for complete sentences
-        self.overlap_duration = 2.0  # 2 second overlap between chunks for continuity
+        self.buffer = deque(maxlen=int(sample_rate * 20))  # 20 second circular buffer
+        self.chunk_duration = 4.0  # Process chunks of 4 seconds for reasonable response time
+        self.overlap_duration = 1.0  # 1 second overlap between chunks for continuity
         self.last_chunk_hash = None  # Track last processed chunk to avoid duplicates
     
     async def initialize(self):
@@ -297,13 +308,20 @@ class StreamingSession:
             
             # Check if we can process a chunk
             current_time = time.time()
+            buffer_duration = len(self.buffer) / self.sample_rate
+            
+            logger.info(f"Buffer status: {len(self.buffer)} samples ({buffer_duration:.2f}s), required: {self.chunk_duration}s")
+            
             if current_time - self.last_output_time >= self.min_output_interval:
                 chunk = self.get_processing_chunk()
                 if chunk is not None:
+                    logger.info(f"Got processing chunk: {len(chunk)} samples ({len(chunk)/self.sample_rate:.2f}s)")
+                    
                     # Create hash of chunk to avoid processing duplicates
                     chunk_hash = hashlib.md5(chunk.tobytes()).hexdigest()
                     
                     if chunk_hash != self.last_chunk_hash:
+                        logger.info("Processing new chunk for translation...")
                         # Process the chunk using global streaming_translator
                         result = await streaming_translator.process_streaming_chunk(chunk, self.src_lang, self.tgt_lang)
                         if result:
@@ -311,8 +329,12 @@ class StreamingSession:
                             self.last_output_time = current_time
                             self.last_chunk_hash = chunk_hash
                             logger.info(f"Sent streaming translation: {len(result)} bytes")
+                        else:
+                            logger.warning("Translation processing returned no result")
                     else:
                         logger.debug("Skipping duplicate chunk")
+                else:
+                    logger.debug(f"No chunk ready - buffer too small ({buffer_duration:.2f}s < {self.chunk_duration}s)")
             
         except Exception as e:
             logger.error(f"Error processing streaming audio chunk: {e}")

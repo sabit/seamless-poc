@@ -686,8 +686,8 @@
                                 silenceCounter = 0;
                                 speechBuffer.push(...inputData);
                                 
-                                // Send when we have enough speech data (about 1 second)
-                                if (speechBuffer.length >= 16000) {
+                                // Send when we have enough speech data (about 0.5 seconds)
+                                if (speechBuffer.length >= 8000) {
                                     // Convert accumulated speech to int16
                                     const int16Data = new Int16Array(speechBuffer.length);
                                     for (let i = 0; i < speechBuffer.length; i++) {
@@ -711,7 +711,7 @@
                                 silenceCounter++;
                                 
                                 // If we have accumulated speech and hit silence, send it
-                                if (speechBuffer.length > 8000 && silenceCounter > 5) { // 0.5s of speech + some silence
+                                if (speechBuffer.length > 4000 && silenceCounter > 3) { // 0.25s of speech + some silence
                                     const int16Data = new Int16Array(speechBuffer.length);
                                     for (let i = 0; i < speechBuffer.length; i++) {
                                         int16Data[i] = Math.max(-32768, Math.min(32767, speechBuffer[i] * 32767));

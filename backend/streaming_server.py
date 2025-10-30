@@ -132,6 +132,8 @@ class OfficialStreamingTranslator:
         # Language configuration
         args.source_lang = src_lang
         args.target_lang = tgt_lang
+        args.src_lang = src_lang  # Alternative naming for compatibility
+        args.tgt_lang = tgt_lang  # Alternative naming for compatibility
         args.task = task
         
         # Streaming configuration parameters

@@ -322,20 +322,39 @@ class OfficialStreamingTranslator:
                 
                 logger.info(f"📥 INPUT: {len(audio_array)} samples, finished={segment_finished}")
                 
-                # Standard approach: Update agent states with speech segment  
+                # RESEARCH-BASED APPROACH: Use proper SimulEval action processing
+                # Based on SeamlessStreaming research: agents expect ReadAction input
+                action = None
+                
                 if isinstance(self.agent_states, list):
-                    # Pipeline agent: Update first state (OnlineFeatureExtractorAgent)
-                    first_state = self.agent_states[0]
-                    
-                    # Update source with new speech segment
-                    if not hasattr(first_state, 'source'):
-                        first_state.source = []
-                    first_state.source.append(speech_segment)
-                    first_state.source_finished = segment_finished
-                    
-                    # Process through agent policy - this handles the pipeline internally
-                    action = self.agent.policy(first_state)
-                    logger.info(f"🔧 Pipeline processed via first state policy")
+                    # Pipeline agent: Create ReadAction for proper SimulEval processing
+                    try:
+                        # Method 1: Use ReadAction as input (standard SimulEval approach)
+                        read_action = ReadAction(speech_segment, finished=segment_finished)
+                        
+                        # Update first state and process
+                        first_state = self.agent_states[0]
+                        if not hasattr(first_state, 'source'):
+                            first_state.source = []
+                        first_state.source.append(read_action)
+                        first_state.source_finished = segment_finished
+                        
+                        # Process through pipeline
+                        action = self.agent.policy(first_state)
+                        logger.info(f"🔧 Pipeline processed with ReadAction")
+                        
+                    except Exception as read_error:
+                        logger.warning(f"⚠️ ReadAction approach failed: {read_error}")
+                        
+                        # Method 2: Fallback to direct SpeechSegment processing
+                        first_state = self.agent_states[0]
+                        if not hasattr(first_state, 'source'):
+                            first_state.source = []
+                        first_state.source.append(speech_segment)
+                        first_state.source_finished = segment_finished
+                        
+                        action = self.agent.policy(first_state)
+                        logger.info(f"🔧 Pipeline processed with SpeechSegment fallback")
                     
                 else:
                     # Single agent: Update state directly

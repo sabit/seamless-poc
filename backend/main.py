@@ -105,8 +105,11 @@ class StreamingTranslator:
         # Take the most recent chunk for better real-time processing
         chunk = np.array(list(self.buffer)[-chunk_samples:])
         
-        # Don't remove samples in streaming mode - keep accumulating for context
-        # This allows better translation continuity
+        # Remove some samples to avoid reprocessing the same content
+        samples_to_remove = int(self.sample_rate * (self.chunk_duration - self.overlap_duration))
+        for _ in range(min(samples_to_remove, len(self.buffer))):
+            if len(self.buffer) > chunk_samples:  # Keep minimum buffer
+                self.buffer.popleft()
         
         return chunk
     
@@ -115,8 +118,14 @@ class StreamingTranslator:
         try:
             # Check for minimum audio energy (avoid processing silence)
             audio_energy = np.sqrt(np.mean(chunk ** 2))
-            if audio_energy < 0.01:  # Threshold for silence detection
+            if audio_energy < 0.02:  # Higher threshold for silence detection
                 logger.debug("Skipping chunk with low audio energy (likely silence)")
+                return None
+            
+            # Check for audio variety (avoid processing repetitive audio)
+            audio_variance = np.var(chunk)
+            if audio_variance < 0.001:  # Too uniform/repetitive
+                logger.debug("Skipping chunk with low variance (likely noise or repetitive)")
                 return None
             
             # Convert to tensor
@@ -136,8 +145,12 @@ class StreamingTranslator:
             
             # Generate with quality-focused settings
             with torch.no_grad():
-                # Use consistent seed for better translation consistency
-                torch.manual_seed(42)
+                # Use different seed for each chunk to prevent getting stuck
+                torch.manual_seed(int(time.time() * 1000) % 2**32)
+                
+                # Clear any cached states in the model
+                if hasattr(self.model, 'clear_cache'):
+                    self.model.clear_cache()
                 
                 logger.info(f"Processing {chunk.shape[0]/self.sample_rate:.2f}s chunk: {src_lang} → {tgt_lang}")
                 start_time = time.time()
@@ -146,12 +159,13 @@ class StreamingTranslator:
                     **inputs, 
                     tgt_lang=tgt_lang,
                     do_sample=True,
-                    temperature=0.1,  # Lower temperature for more deterministic, better quality
-                    num_beams=2,  # Use beam search for better quality
-                    max_length=400,  # Allow longer output for complete phrases
+                    temperature=0.7,  # Increase temperature for more variety
+                    num_beams=1,  # Use sampling instead of beam search for speed
+                    max_new_tokens=128,  # Use max_new_tokens instead of max_length
                     pad_token_id=self.processor.tokenizer.pad_token_id,
-                    repetition_penalty=1.1,  # Prevent repetition
-                    length_penalty=1.0  # Neutral length penalty
+                    repetition_penalty=1.5,  # Higher penalty to prevent repetition
+                    no_repeat_ngram_size=3,  # Prevent repeating 3-grams
+                    early_stopping=True  # Stop when EOS token is generated
                 )
                 
                 generation_time = time.time() - start_time
@@ -200,11 +214,12 @@ class StreamingSession:
         self.sample_rate = sample_rate
         self.running = False
         self.last_output_time = 0
-        self.min_output_interval = 1.0  # Minimum 1s between outputs for better quality
+        self.min_output_interval = 2.0  # Minimum 2s between outputs to prevent repetition
         # Use streaming buffer management without creating new translator
-        self.buffer = deque(maxlen=int(sample_rate * 15))  # 15 second circular buffer
-        self.chunk_duration = 5.0  # Process chunks of 5 seconds for better context
-        self.overlap_duration = 1.5  # 1.5 second overlap between chunks for continuity
+        self.buffer = deque(maxlen=int(sample_rate * 20))  # 20 second circular buffer
+        self.chunk_duration = 6.0  # Process chunks of 6 seconds for complete phrases
+        self.overlap_duration = 2.0  # 2 second overlap between chunks for continuity
+        self.last_chunk_hash = None  # Track last processed chunk to avoid duplicates
     
     async def initialize(self):
         """Initialize the streaming session - no model loading needed"""
@@ -224,8 +239,12 @@ class StreamingSession:
         # Take the most recent chunk for better real-time processing
         chunk = np.array(list(self.buffer)[-chunk_samples:])
         
-        # Don't remove samples in streaming mode for better continuity
-        # Keep accumulating context but limit buffer size via maxlen
+        # Remove some samples to avoid reprocessing the same content
+        # Keep overlap but ensure we progress through the buffer
+        samples_to_remove = int(self.sample_rate * (self.chunk_duration - self.overlap_duration))
+        for _ in range(min(samples_to_remove, len(self.buffer))):
+            if len(self.buffer) > chunk_samples:  # Keep minimum buffer
+                self.buffer.popleft()
         
         return chunk
 
@@ -251,12 +270,19 @@ class StreamingSession:
             if current_time - self.last_output_time >= self.min_output_interval:
                 chunk = self.get_processing_chunk()
                 if chunk is not None:
-                    # Process the chunk using global streaming_translator
-                    result = await streaming_translator.process_streaming_chunk(chunk, self.src_lang, self.tgt_lang)
-                    if result:
-                        await self.websocket.send_bytes(result)
-                        self.last_output_time = current_time
-                        logger.info(f"Sent streaming translation: {len(result)} bytes")
+                    # Create hash of chunk to avoid processing duplicates
+                    chunk_hash = hashlib.md5(chunk.tobytes()).hexdigest()
+                    
+                    if chunk_hash != self.last_chunk_hash:
+                        # Process the chunk using global streaming_translator
+                        result = await streaming_translator.process_streaming_chunk(chunk, self.src_lang, self.tgt_lang)
+                        if result:
+                            await self.websocket.send_bytes(result)
+                            self.last_output_time = current_time
+                            self.last_chunk_hash = chunk_hash
+                            logger.info(f"Sent streaming translation: {len(result)} bytes")
+                    else:
+                        logger.debug("Skipping duplicate chunk")
             
         except Exception as e:
             logger.error(f"Error processing streaming audio chunk: {e}")

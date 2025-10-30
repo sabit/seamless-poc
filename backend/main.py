@@ -50,30 +50,78 @@ class SeamlessTranslator:
             raise e
     
     def audio_bytes_to_tensor(self, audio_bytes: bytes, sample_rate: int = 16000):
-        """Convert raw PCM audio bytes to tensor for model input"""
+        """Convert audio bytes to tensor for model input - handles WAV and WebM formats"""
         try:
-            logger.info(f"Processing {len(audio_bytes)} bytes of raw PCM audio data")
+            logger.info(f"Processing {len(audio_bytes)} bytes, format signature: {audio_bytes[:12]}")
             
-            # Handle potential padding issues
-            if len(audio_bytes) % 2 != 0:
-                # Pad with zero byte to make it even for int16 conversion
-                audio_bytes = audio_bytes + b'\x00'
-                logger.info(f"Padded audio to {len(audio_bytes)} bytes")
-            
-            # Convert bytes to numpy array (16-bit signed PCM from frontend)
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-            
-            # Convert from int16 to float32 and normalize to [-1, 1]
-            waveform = audio_np.astype(np.float32) / 32768.0
-            
-            logger.info(f"Converted to waveform: {len(waveform)} samples, range: [{waveform.min():.3f}, {waveform.max():.3f}]")
-            
-            # Convert numpy array to torch tensor
-            return torch.from_numpy(waveform).float()
+            # Detect audio format by checking file signature
+            if audio_bytes.startswith(b'RIFF') and b'WAVE' in audio_bytes[:20]:
+                # WAV format detected
+                return self._process_wav_audio(audio_bytes, sample_rate)
+            elif audio_bytes.startswith(b'\x1a\x45\xdf\xa3') or b'webm' in audio_bytes[:50].lower():
+                # WebM format detected  
+                return self._process_webm_audio(audio_bytes, sample_rate)
+            else:
+                # Try as raw PCM data
+                return self._process_raw_pcm(audio_bytes, sample_rate)
                 
         except Exception as e:
-            logger.error(f"Error processing raw PCM audio bytes: {e}")
-            logger.error(f"Audio bytes length: {len(audio_bytes)}, first few bytes: {audio_bytes[:20]}")
+            logger.error(f"Error processing audio bytes: {e}")
+            logger.error(f"Audio bytes length: {len(audio_bytes)}, first 20 bytes: {audio_bytes[:20]}")
+            return None
+    
+    def _process_wav_audio(self, audio_bytes: bytes, sample_rate: int):
+        """Process WAV audio format"""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file.flush()
+                
+                # Load with librosa
+                waveform, sr = librosa.load(temp_file.name, sr=sample_rate, mono=True)
+                os.unlink(temp_file.name)
+                
+                logger.info(f"Processed WAV: {len(waveform)} samples at {sr}Hz")
+                return torch.from_numpy(waveform).float()
+                
+        except Exception as e:
+            logger.error(f"WAV processing failed: {e}")
+            return None
+    
+    def _process_webm_audio(self, audio_bytes: bytes, sample_rate: int):
+        """Process WebM audio format"""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file.flush()
+                
+                # Load with librosa
+                waveform, sr = librosa.load(temp_file.name, sr=sample_rate, mono=True)
+                os.unlink(temp_file.name)
+                
+                logger.info(f"Processed WebM: {len(waveform)} samples at {sr}Hz")
+                return torch.from_numpy(waveform).float()
+                
+        except Exception as e:
+            logger.error(f"WebM processing failed: {e}")
+            return None
+    
+    def _process_raw_pcm(self, audio_bytes: bytes, sample_rate: int):
+        """Process raw PCM audio data"""
+        try:
+            # Handle potential padding issues
+            if len(audio_bytes) % 2 != 0:
+                audio_bytes = audio_bytes + b'\x00'
+            
+            # Convert bytes to numpy array (16-bit signed PCM)
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+            waveform = audio_np.astype(np.float32) / 32768.0
+            
+            logger.info(f"Processed raw PCM: {len(waveform)} samples")
+            return torch.from_numpy(waveform).float()
+            
+        except Exception as e:
+            logger.error(f"Raw PCM processing failed: {e}")
             return None
     
     def tensor_to_audio_bytes(self, tensor: torch.Tensor, sample_rate: int = 16000):

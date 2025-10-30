@@ -96,17 +96,18 @@ class SeamlessTranslator:
             logger.error(f"Error converting tensor to audio bytes: {e}")
             return None
     
-    async def translate_speech(self, audio_bytes: bytes, src_lang: str, tgt_lang: str):
+    async def translate_speech(self, audio_bytes: bytes, src_lang: str, tgt_lang: str, sample_rate: int = 16000):
         """Translate speech from source to target language"""
         try:
             # Convert audio bytes to tensor
-            waveform = self.audio_bytes_to_tensor(audio_bytes)
+            waveform = self.audio_bytes_to_tensor(audio_bytes, sample_rate)
             if waveform is None:
                 return None
             
-            # Process audio with the model
+            # Process audio with the model (fixed deprecated parameter and added sampling_rate)
             inputs = self.processor(
-                audios=waveform,
+                audio=waveform,
+                sampling_rate=sample_rate,
                 src_lang=src_lang,
                 return_tensors="pt"
             ).to(self.device)

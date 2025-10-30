@@ -141,6 +141,12 @@ class OfficialStreamingTranslator:
                 "start_index": 0,
                 "end_index": 999999,  # Use large number instead of None
                 
+                # Additional SimulEval parameters to prevent None comparisons
+                "scores": [],
+                "instances": [],
+                "prediction": "",
+                "reference": "",
+                
                 # Additional required parameters
                 "output": "/tmp",  # Set to a valid path instead of None
                 "log_level": "INFO",
@@ -148,7 +154,7 @@ class OfficialStreamingTranslator:
                 "host": "localhost",  # Set to a valid host instead of None
                 
                 # Model loading settings
-                "gated_model_dir": None,
+                "gated_model_dir": "/tmp",  # Set to valid path instead of None
                 "model_name": "seamless_streaming_unity",  # Set explicitly
                 
                 # Generation settings
@@ -170,6 +176,13 @@ class OfficialStreamingTranslator:
                 "eval_quality": False,
                 "continue_finished": True,
                 "reset_model": False,
+                
+                # More specific agent parameters
+                "source": "/tmp/source.wav",
+                "target": "/tmp/target.txt",
+                "config": None,
+                "system_dir": "/tmp",
+                "user_dir": "/tmp",
             }
             
             # Select appropriate agent class
@@ -211,7 +224,7 @@ class OfficialStreamingTranslator:
                         'port': 12321,  # Valid port instead of None
                         'host': 'localhost',  # Valid host instead of None
                         'model_name': 'seamless_streaming_unity',
-                        'gated_model_dir': None,
+                        'gated_model_dir': '/tmp',
                         'sample_rate': 16000,
                         'chunk_size': 4096,
                         'temperature': 1.0,
@@ -223,7 +236,11 @@ class OfficialStreamingTranslator:
                         'eval_latency': True,
                         'eval_quality': False,
                         'continue_finished': True,
-                        'reset_model': False
+                        'reset_model': False,
+                        'scores': [],
+                        'instances': [],
+                        'prediction': '',
+                        'reference': ''
                     }
                     
                     # Set defaults first
@@ -240,20 +257,47 @@ class OfficialStreamingTranslator:
             
             args_obj = Args(**agent_args)
             
-            # Build the agent - try build_agent first, fallback to direct instantiation
+            # Try direct agent instantiation with minimal args
             try:
-                self.agent = build_agent(agent_class, args_obj)
-                logger.info("✅ Agent built using build_agent function")
-            except Exception as build_error:
-                logger.warning(f"⚠️ build_agent failed: {build_error}")
-                logger.info("🔄 Trying direct agent instantiation...")
+                # Create a minimal args object with only essential parameters
+                class MinimalArgs:
+                    def __init__(self):
+                        self.device = self.device
+                        self.dtype = "fp16"
+                        self.fp16 = True
+                        self.task = task
+                        self.tgt_lang = tgt_lang
+                        self.src_lang = src_lang
+                        self.unity_model_name = "seamless_streaming_unity"
+                        self.monotonic_decoder_model_name = "seamless_streaming_monotonic_decoder"
+                        self.vad = True
+                        self.vad_chunk_size = 480
+                        self.vad_threshold = 0.5
+                        self.min_starting_wait = 1000
+                        self.max_len_a = 1.2
+                        self.max_len_b = 100
+                        self.beam_size = 3
+                        # Set all other attributes to safe defaults
+                        for key, value in agent_args.items():
+                            if not hasattr(self, key):
+                                setattr(self, key, value)
+                    
+                    def __getattr__(self, name):
+                        # Return safe defaults for missing attributes
+                        return getattr(self, name, 0)  # Return 0 instead of None
+                
+                minimal_args = MinimalArgs()
+                self.agent = agent_class(minimal_args)
+                logger.info("✅ Agent created with minimal args")
+            except Exception as minimal_error:
+                logger.error(f"❌ Minimal instantiation failed: {minimal_error}")
+                # Try the original approach as last resort
                 try:
-                    # Use the same args object for direct instantiation
-                    self.agent = agent_class(args_obj)
-                    logger.info("✅ Agent created using direct instantiation")
-                except Exception as direct_error:
-                    logger.error(f"❌ Direct instantiation also failed: {direct_error}")
-                    raise direct_error
+                    self.agent = build_agent(agent_class, args_obj)
+                    logger.info("✅ Agent built using build_agent as fallback")
+                except Exception as final_error:
+                    logger.error(f"❌ All agent creation methods failed: {final_error}")
+                    raise final_error
             
             self.initialized = True
             

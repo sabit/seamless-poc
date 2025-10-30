@@ -141,6 +141,7 @@ class OfficialStreamingTranslator:
         args.segment_size = 2000  # Audio segment size
         args.window_size = 2000  # Feature extraction window size
         args.feature_dim = 80  # Feature dimension (e.g., mel-spectrogram features)
+        args.min_starting_wait_w2vbert = 1000  # Minimum wait for w2v-BERT encoder
         args.denormalize = False  # Whether to denormalize the output
         
         # Text generation parameters
@@ -166,6 +167,7 @@ class OfficialStreamingTranslator:
         logger.info(f"   📐 Segment size: {args.segment_size}")
         logger.info(f"   🪟 Window size: {args.window_size}")
         logger.info(f"   🎵 Feature dim: {args.feature_dim}")
+        logger.info(f"   ⏳ Min starting wait w2vbert: {args.min_starting_wait_w2vbert}")
         logger.info(f"   📏 Max len a: {args.max_len_a}")
         logger.info(f"   📏 Max len b: {args.max_len_b}")
         logger.info(f"   🔍 Beam size: {args.beam_size}")

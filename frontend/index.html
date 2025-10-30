@@ -630,14 +630,18 @@
                     this.isStreaming = true;
                     this.updateUIForStreaming(true);
                     
-                    // Get microphone access with specific constraints
+                    // Get microphone access with speech-optimized constraints
                     this.audioStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             sampleRate: 16000,
                             channelCount: 1,
                             echoCancellation: true,
                             noiseSuppression: true,
-                            autoGainControl: true
+                            autoGainControl: true,
+                            googEchoCancellation: true,
+                            googAutoGainControl: true,
+                            googNoiseSuppression: true,
+                            googHighpassFilter: true
                         }
                     });
                     
@@ -664,29 +668,63 @@
                     console.log('🔄 Script processor created with buffer size: 4096');
                     
                     let chunkCount = 0;
+                    let speechBuffer = [];
+                    let silenceCounter = 0;
+                    
                     processor.onaudioprocess = (event) => {
                         if (this.isStreaming && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                             const inputData = event.inputBuffer.getChannelData(0);
                             
-                            // Check audio level to avoid sending silence
+                            // Check audio level and quality to avoid sending silence or noise
                             const rms = Math.sqrt(inputData.reduce((sum, sample) => sum + sample * sample, 0) / inputData.length);
+                            const maxAmplitude = Math.max(...inputData.map(Math.abs));
                             
-                            if (rms > 0.01) { // Only send if there's actual audio
-                                // Convert float32 to int16
-                                const int16Data = new Int16Array(inputData.length);
-                                for (let i = 0; i < inputData.length; i++) {
-                                    int16Data[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
-                                }
+                            // Simple voice activity detection
+                            const isSpeech = rms > 0.03 && maxAmplitude > 0.08;
+                            
+                            if (isSpeech) {
+                                silenceCounter = 0;
+                                speechBuffer.push(...inputData);
                                 
-                                // Send audio chunk to server
-                                try {
-                                    this.websocket.send(int16Data.buffer);
-                                    chunkCount++;
-                                    if (chunkCount % 50 === 0) { // Log every 50 chunks
-                                        console.log(`📤 Sent ${chunkCount} audio chunks, RMS: ${rms.toFixed(4)}`);
+                                // Send when we have enough speech data (about 1 second)
+                                if (speechBuffer.length >= 16000) {
+                                    // Convert accumulated speech to int16
+                                    const int16Data = new Int16Array(speechBuffer.length);
+                                    for (let i = 0; i < speechBuffer.length; i++) {
+                                        int16Data[i] = Math.max(-32768, Math.min(32767, speechBuffer[i] * 32767));
                                     }
-                                } catch (error) {
-                                    console.error('❌ Error sending audio chunk:', error);
+                                    
+                                    // Send speech chunk to server
+                                    try {
+                                        this.websocket.send(int16Data.buffer);
+                                        chunkCount++;
+                                        console.log(`📤 Sent speech chunk ${chunkCount}, ${speechBuffer.length} samples, RMS: ${rms.toFixed(4)}`);
+                                        
+                                        // Clear buffer after sending
+                                        speechBuffer = [];
+                                    } catch (error) {
+                                        console.error('❌ Error sending speech chunk:', error);
+                                    }
+                                }
+                            } else {
+                                // Track silence
+                                silenceCounter++;
+                                
+                                // If we have accumulated speech and hit silence, send it
+                                if (speechBuffer.length > 8000 && silenceCounter > 5) { // 0.5s of speech + some silence
+                                    const int16Data = new Int16Array(speechBuffer.length);
+                                    for (let i = 0; i < speechBuffer.length; i++) {
+                                        int16Data[i] = Math.max(-32768, Math.min(32767, speechBuffer[i] * 32767));
+                                    }
+                                    
+                                    try {
+                                        this.websocket.send(int16Data.buffer);
+                                        chunkCount++;
+                                        console.log(`📤 Sent final speech chunk ${chunkCount}, ${speechBuffer.length} samples`);
+                                        speechBuffer = [];
+                                    } catch (error) {
+                                        console.error('❌ Error sending final speech chunk:', error);
+                                    }
                                 }
                             }
                         }

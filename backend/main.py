@@ -70,10 +70,10 @@ class StreamingTranslator:
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.chunk_duration = 4.0  # Process chunks of 4 seconds for better context
-        self.overlap_duration = 1.0  # 1 second overlap between chunks for continuity
+        self.chunk_duration = 8.0  # Process chunks of 8 seconds for complete sentences
+        self.overlap_duration = 2.0  # 2 second overlap between chunks for continuity
         self.sample_rate = 16000
-        self.buffer = deque(maxlen=int(self.sample_rate * 15))  # 15 second circular buffer for more context
+        self.buffer = deque(maxlen=int(self.sample_rate * 30))  # 30 second circular buffer for more context
         logger.info(f"Using device: {self.device}")
         
     async def initialize(self):
@@ -118,24 +118,53 @@ class StreamingTranslator:
         try:
             # Check for minimum audio energy (avoid processing silence)
             audio_energy = np.sqrt(np.mean(chunk ** 2))
-            if audio_energy < 0.02:  # Higher threshold for silence detection
+            if audio_energy < 0.05:  # Higher threshold for silence detection
                 logger.debug("Skipping chunk with low audio energy (likely silence)")
                 return None
             
-            # Check for audio variety (avoid processing repetitive audio)
+            # Check for audio variety (avoid processing repetitive audio or noise)
             audio_variance = np.var(chunk)
-            if audio_variance < 0.001:  # Too uniform/repetitive
+            if audio_variance < 0.01:  # Too uniform/repetitive
                 logger.debug("Skipping chunk with low variance (likely noise or repetitive)")
+                return None
+            
+            # Check for speech-like characteristics (frequency content)
+            # Simple check: speech should have varying amplitudes across the chunk
+            chunk_segments = np.array_split(chunk, 10)  # Split into 10 segments
+            segment_energies = [np.sqrt(np.mean(seg ** 2)) for seg in chunk_segments]
+            energy_variance = np.var(segment_energies)
+            
+            if energy_variance < 0.001:  # Too uniform across time
+                logger.debug("Skipping chunk with uniform energy (likely not speech)")
                 return None
             
             # Convert to tensor
             waveform = torch.from_numpy(chunk).float()
             
             # Normalize audio to prevent clipping
-            if torch.max(torch.abs(waveform)) > 1.0:
-                waveform = waveform / torch.max(torch.abs(waveform))
+            max_amplitude = torch.max(torch.abs(waveform))
+            if max_amplitude > 1.0:
+                waveform = waveform / max_amplitude
+            elif max_amplitude < 0.1:  # Boost very quiet audio
+                waveform = waveform * (0.3 / max_amplitude)
             
-            # Process with model
+            # Simple high-pass filter to remove low-frequency noise
+            # This helps focus on speech frequencies
+            if len(waveform) > 100:
+                # Simple difference-based high-pass filter
+                waveform = waveform - torch.roll(waveform, 1) * 0.95
+                waveform[0] = 0  # Fix the first sample
+            
+            # Process with model - ensure proper language codes
+            if src_lang not in ['eng', 'ben']:
+                logger.warning(f"Invalid source language: {src_lang}, defaulting to 'eng'")
+                src_lang = 'eng'
+            if tgt_lang not in ['eng', 'ben']:
+                logger.warning(f"Invalid target language: {tgt_lang}, defaulting to 'ben'")
+                tgt_lang = 'ben'
+            
+            logger.info(f"Processing with languages: {src_lang} → {tgt_lang}")
+            
             inputs = self.processor(
                 audio=waveform,
                 sampling_rate=self.sample_rate,
@@ -158,14 +187,15 @@ class StreamingTranslator:
                 audio_array = self.model.generate(
                     **inputs, 
                     tgt_lang=tgt_lang,
-                    do_sample=True,
-                    temperature=0.7,  # Increase temperature for more variety
-                    num_beams=1,  # Use sampling instead of beam search for speed
-                    max_new_tokens=128,  # Use max_new_tokens instead of max_length
+                    do_sample=False,  # Use greedy decoding for more deterministic results
+                    num_beams=3,  # Use beam search for better quality
+                    max_new_tokens=256,  # Allow longer translations for complete thoughts
                     pad_token_id=self.processor.tokenizer.pad_token_id,
-                    repetition_penalty=1.5,  # Higher penalty to prevent repetition
-                    no_repeat_ngram_size=3,  # Prevent repeating 3-grams
-                    early_stopping=True  # Stop when EOS token is generated
+                    repetition_penalty=1.2,  # Moderate penalty to prevent repetition
+                    length_penalty=1.1,  # Slight preference for longer, complete translations
+                    early_stopping=True,  # Stop when EOS token is generated
+                    output_scores=False,  # Don't return scores for efficiency
+                    return_dict_in_generate=False  # Return only the generated tokens
                 )
                 
                 generation_time = time.time() - start_time
@@ -214,10 +244,10 @@ class StreamingSession:
         self.sample_rate = sample_rate
         self.running = False
         self.last_output_time = 0
-        self.min_output_interval = 2.0  # Minimum 2s between outputs to prevent repetition
+        self.min_output_interval = 4.0  # Minimum 4s between outputs for complete phrases
         # Use streaming buffer management without creating new translator
-        self.buffer = deque(maxlen=int(sample_rate * 20))  # 20 second circular buffer
-        self.chunk_duration = 6.0  # Process chunks of 6 seconds for complete phrases
+        self.buffer = deque(maxlen=int(sample_rate * 30))  # 30 second circular buffer
+        self.chunk_duration = 8.0  # Process chunks of 8 seconds for complete sentences
         self.overlap_duration = 2.0  # 2 second overlap between chunks for continuity
         self.last_chunk_hash = None  # Track last processed chunk to avoid duplicates
     

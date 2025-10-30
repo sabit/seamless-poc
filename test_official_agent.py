@@ -25,7 +25,7 @@ def test_official_agent():
         
         # Initialize translator
         logger.info("🚀 Initializing translator...")
-        translator = OfficialStreamingTranslator(source_lang="eng", target_lang="ben")
+        translator = OfficialStreamingTranslator(source_lang="eng", target_lang="ben", auto_init=True)
         
         logger.info("✅ SUCCESS: Official SeamlessStreaming agent initialized successfully!")
         logger.info(f"   📱 Agent type: {type(translator.agent).__name__}")

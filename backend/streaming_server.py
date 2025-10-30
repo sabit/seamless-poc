@@ -91,10 +91,19 @@ except ImportError as e:
 class OfficialStreamingTranslator:
     """Official SeamlessStreaming implementation"""
     
-    def __init__(self):
+    def __init__(self, source_lang="eng", target_lang="ben", task="s2st", auto_init=False):
         self.agent = None
         self.initialized = False
         self.device = torch.device("cuda")
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        self.task = task
+        self.args = None  # Store args for test access
+        
+        # Auto-initialize if requested (useful for testing)
+        if auto_init:
+            import asyncio
+            asyncio.run(self.initialize())
         
     def _create_official_args(self, task="s2st", src_lang="eng", tgt_lang="ben"):
         """Create arguments object for SeamlessStreaming agent"""
@@ -157,13 +166,19 @@ class OfficialStreamingTranslator:
         
         return args
         
-    async def initialize(self, task="s2st", src_lang="eng", tgt_lang="ben"):
+    async def initialize(self, task=None, src_lang=None, tgt_lang=None):
         """Initialize the official streaming agent"""
         try:
+            # Use instance variables if parameters not provided
+            task = task or self.task
+            src_lang = src_lang or self.source_lang
+            tgt_lang = tgt_lang or self.target_lang
+            
             logger.info(f"Initializing official SeamlessStreaming agent for {task}: {src_lang} → {tgt_lang}")
             
             # Configure agent arguments with all required parameters
             args = self._create_official_args(task, src_lang, tgt_lang)
+            self.args = args  # Store for test access
             
             # Initialize the streaming agent with proper configuration
             logger.info("🔧 Creating SeamlessStreamingS2STAgent...")

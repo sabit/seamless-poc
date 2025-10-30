@@ -188,6 +188,86 @@
             background: #ffc107;
             color: black;
         }
+        
+        /* Microphone Level Meter Styles */
+        .mic-meter-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .mic-meter-container label {
+            font-weight: 600;
+            color: #495057;
+            white-space: nowrap;
+        }
+        
+        .mic-meter {
+            position: relative;
+            width: 200px;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .mic-meter-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, 
+                #28a745 0%,     /* Green for low levels */
+                #ffc107 70%,    /* Yellow for medium levels */
+                #dc3545 90%     /* Red for high levels */
+            );
+            transition: width 0.1s ease-out;
+            border-radius: 10px;
+        }
+        
+        .mic-meter-peak {
+            position: absolute;
+            top: 0;
+            right: 100%;
+            width: 2px;
+            height: 100%;
+            background: #dc3545;
+            transition: right 0.3s ease-out;
+        }
+        
+        .mic-level-text {
+            font-size: 14px;
+            font-weight: 500;
+            color: #495057;
+            min-width: 35px;
+            text-align: right;
+        }
+        
+        /* Different colors based on mic level */
+        .mic-meter-container.low .mic-level-text {
+            color: #6c757d;
+        }
+        
+        .mic-meter-container.good .mic-level-text {
+            color: #28a745;
+        }
+        
+        .mic-meter-container.high .mic-level-text {
+            color: #ffc107;
+        }
+        
+        .mic-meter-container.loud .mic-level-text {
+            color: #dc3545;
+        }
+        
+        .mic-meter-container.silent {
+            opacity: 0.6;
+        }
     </style>
 </head>
 <body>
@@ -224,6 +304,16 @@
                 <button class="record-btn" id="streamBtn">🌊 Start Streaming</button>
             </div>
             
+            <!-- Microphone Level Meter -->
+            <div class="mic-meter-container">
+                <label for="micLevel">🎤 Mic Level:</label>
+                <div class="mic-meter">
+                    <div class="mic-meter-bar" id="micMeterBar"></div>
+                    <div class="mic-meter-peak" id="micMeterPeak"></div>
+                </div>
+                <span class="mic-level-text" id="micLevelText">0%</span>
+            </div>
+            
             <div class="audio-controls">
                 <div class="volume-control">
                     <label for="outputVolume">Volume:</label>
@@ -250,6 +340,9 @@
                 this.lastAudioTime = 0;
                 this.outputVolume = 0.8;
                 this.streamingProcessor = null;
+                this.micAnalyser = null;
+                this.micMeterUpdateInterval = null;
+                this.peakLevel = 0;
                 
                 this.initializeUI();
                 this.connectWebSocket();
@@ -326,6 +419,10 @@
                 this.connectionStatus = document.getElementById('connectionStatus');
                 this.outputVolumeSlider = document.getElementById('outputVolume');
                 this.volumeValue = document.getElementById('volumeValue');
+                this.micMeterBar = document.getElementById('micMeterBar');
+                this.micMeterPeak = document.getElementById('micMeterPeak');
+                this.micLevelText = document.getElementById('micLevelText');
+                this.micMeterContainer = document.querySelector('.mic-meter-container');
                 
                 this.streamBtn.addEventListener('click', () => this.toggleStreaming());
                 this.swapBtn.addEventListener('click', () => this.swapLanguages());
@@ -669,6 +766,15 @@
                     const source = this.audioContext.createMediaStreamSource(this.audioStream);
                     console.log('🎙️ Audio source node created');
                     
+                    // Create AnalyserNode for microphone level monitoring
+                    this.micAnalyser = this.audioContext.createAnalyser();
+                    this.micAnalyser.fftSize = 256;
+                    this.micAnalyser.smoothingTimeConstant = 0.8;
+                    console.log('📊 Microphone analyser created');
+                    
+                    // Start microphone level monitoring
+                    this.startMicLevelMonitoring();
+                    
                     // Create ScriptProcessorNode for audio processing
                     const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
                     console.log('🔄 Script processor created with buffer size: 4096');
@@ -736,7 +842,8 @@
                         }
                     };
                     
-                    // Connect audio graph
+                    // Connect audio graph with analyser for mic monitoring
+                    source.connect(this.micAnalyser);
                     source.connect(processor);
                     processor.connect(this.audioContext.destination);
                     
@@ -751,14 +858,101 @@
                 }
             }
             
+            startMicLevelMonitoring() {
+                if (!this.micAnalyser) return;
+                
+                console.log('📊 Starting microphone level monitoring');
+                
+                const bufferLength = this.micAnalyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+                
+                const updateMicLevel = () => {
+                    if (!this.isStreaming || !this.micAnalyser) {
+                        // Reset mic meter when not streaming
+                        this.updateMicMeter(0);
+                        return;
+                    }
+                    
+                    // Get frequency data from analyser
+                    this.micAnalyser.getByteFrequencyData(dataArray);
+                    
+                    // Calculate RMS (Root Mean Square) for volume level
+                    let sum = 0;
+                    for (let i = 0; i < bufferLength; i++) {
+                        sum += dataArray[i] * dataArray[i];
+                    }
+                    const rms = Math.sqrt(sum / bufferLength);
+                    
+                    // Convert to percentage (0-100)
+                    const level = Math.min(100, (rms / 255) * 100);
+                    
+                    // Update peak level with decay
+                    if (level > this.peakLevel) {
+                        this.peakLevel = level;
+                    } else {
+                        this.peakLevel *= 0.95; // Decay peak level
+                    }
+                    
+                    this.updateMicMeter(level);
+                    
+                    // Continue monitoring
+                    requestAnimationFrame(updateMicLevel);
+                };
+                
+                updateMicLevel();
+            }
+            
+            updateMicMeter(level) {
+                const percentage = Math.round(level);
+                
+                // Update meter bar
+                this.micMeterBar.style.width = `${percentage}%`;
+                
+                // Update peak indicator
+                this.micMeterPeak.style.right = `${100 - this.peakLevel}%`;
+                
+                // Update text
+                this.micLevelText.textContent = `${percentage}%`;
+                
+                // Update container class based on level for styling
+                this.micMeterContainer.classList.remove('silent', 'low', 'good', 'high', 'loud');
+                
+                if (percentage < 5) {
+                    this.micMeterContainer.classList.add('silent');
+                } else if (percentage < 20) {
+                    this.micMeterContainer.classList.add('low');
+                } else if (percentage < 60) {
+                    this.micMeterContainer.classList.add('good');
+                } else if (percentage < 80) {
+                    this.micMeterContainer.classList.add('high');
+                } else {
+                    this.micMeterContainer.classList.add('loud');
+                }
+            }
+            
             stopStreaming() {
                 console.log('⏹️ Stopping streaming...');
                 
                 this.isStreaming = false;
                 
+                // Stop mic level monitoring
+                if (this.micMeterUpdateInterval) {
+                    clearInterval(this.micMeterUpdateInterval);
+                    this.micMeterUpdateInterval = null;
+                }
+                
+                // Reset mic meter
+                this.updateMicMeter(0);
+                this.peakLevel = 0;
+                
                 if (this.streamingProcessor) {
                     this.streamingProcessor.disconnect();
                     this.streamingProcessor = null;
+                }
+                
+                if (this.micAnalyser) {
+                    this.micAnalyser.disconnect();
+                    this.micAnalyser = null;
                 }
                 
                 if (this.audioStream) {

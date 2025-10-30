@@ -26,6 +26,7 @@ librosa>=0.10.1
 soundfile>=0.12.1
 sentencepiece>=0.1.99
 huggingface-hub>=0.16.0
+protobuf>=3.19.0
 
 # Dependencies for seamless_communication (will be installed separately)
 # fairseq2 - will be installed automatically with seamless_communication

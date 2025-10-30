@@ -93,6 +93,7 @@ class OfficialStreamingTranslator:
     
     def __init__(self, source_lang="eng", target_lang="ben", task="s2st", auto_init=False):
         self.agent = None
+        self.agent_states = None
         self.initialized = False
         self.device = torch.device("cuda")
         self.source_lang = source_lang
@@ -237,8 +238,11 @@ class OfficialStreamingTranslator:
             return None
             
         try:
+            logger.info(f"🔄 Processing audio chunk: {len(audio_chunk)} bytes")
+            
             # Convert audio bytes to int16 array (frontend sends int16 PCM)
             audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
+            logger.info(f"📊 Converted to {len(audio_np)} audio samples")
             
             # Convert to float32 and normalize
             audio_float = audio_np.astype(np.float32) / 32768.0
@@ -250,8 +254,25 @@ class OfficialStreamingTranslator:
                 finished=False
             )
             
+            logger.info(f"🎤 Created speech segment with {len(audio_float)} samples")
+            
+            # Initialize agent states if needed
+            if not hasattr(self, 'agent_states') or self.agent_states is None:
+                self.agent_states = self.agent.build_states()
+                logger.info("🏗️ Built initial agent states")
+            
+            # Update agent states with new segment
+            self.agent_states.source = [segment]
+            self.agent_states.source_finished = False
+            self.agent_states.tgt_lang = self.target_lang
+            
             # Process with the streaming agent
-            action = self.agent.policy(segment)
+            action = self.agent.policy(self.agent_states)
+            logger.info(f"🤖 Agent returned action: {type(action)}, finished: {getattr(action, 'finished', 'unknown')}")
+            
+            # Debug action details
+            if hasattr(action, '__dict__'):
+                logger.info(f"🔍 Action attributes: {list(action.__dict__.keys())}")
             
             # Check if we have audio translation output
             if hasattr(action, 'content') and action.content is not None:
@@ -391,11 +412,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     if "bytes" in data:
                         # Process audio data
                         audio_data = data["bytes"]
+                        logger.info(f"📥 Received audio data: {len(audio_data)} bytes")
+                        
                         result = await session.process_audio(audio_data)
                         
                         if result:
+                            logger.info(f"📤 Sending audio response: {len(result)} bytes")
                             # Send translated audio as binary data
                             await websocket.send_bytes(result)
+                        else:
+                            logger.warning("⚠️ No translation result from agent")
                     
                     elif "text" in data:
                         # Handle JSON messages

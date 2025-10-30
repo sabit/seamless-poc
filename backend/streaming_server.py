@@ -318,7 +318,9 @@ class OfficialStreamingTranslator:
                     # Pipeline agents - ONLY update the FIRST state (FeatureStates) with audio
                     # The pipeline should flow: FeatureStates -> AgentStates -> ... -> AgentStates
                     
-                    # Update only the first state (FeatureStates) with new audio segment
+                    # CRITICAL FIX: Proper pipeline data flow - each stage processes sequentially
+                    
+                    # Step 1: Feed audio ONLY to first state (FeatureStates)
                     first_state = self.agent_states[0]
                     if hasattr(first_state, 'source'):
                         first_state.source = [segment]
@@ -330,8 +332,11 @@ class OfficialStreamingTranslator:
                     if hasattr(first_state, 'finished'):
                         first_state.finished = segment_finished
                     
-                    # Set language parameters on all states
+                    # Step 2: Process pipeline sequentially - EACH STAGE individually
+                    action = None
+                    
                     for i, state in enumerate(self.agent_states):
+                        # Set language parameters on current state
                         if hasattr(state, 'tgt_lang'):
                             state.tgt_lang = self.target_lang
                         if hasattr(state, 'target_lang'):
@@ -339,14 +344,28 @@ class OfficialStreamingTranslator:
                         if hasattr(state, 'finished'):
                             state.finished = segment_finished
                         
-                        # DEBUG: Log state info for first few segments
-                        if self.total_samples < 50000:
-                            source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
-                            target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
-                            logger.info(f"🔧 State {i}: source={source_len}, target={target_len}, finished={segment_finished}")
+                        # Log state before processing
+                        source_len = len(state.source) if hasattr(state, 'source') and state.source else 0
+                        target_len = len(state.target) if hasattr(state, 'target') and state.target else 0
+                        logger.info(f"🔧 State {i}: source={source_len}, target={target_len}, finished={segment_finished}")
+                        
+                        # Process INDIVIDUAL stage through agent policy
+                        stage_result = self.agent.policy(state)
+                        
+                        # Chain output to next stage (pipeline flow)
+                        if i < len(self.agent_states) - 1 and hasattr(state, 'target') and state.target:
+                            next_state = self.agent_states[i + 1]
+                            # Pass current stage's output as next stage's input
+                            next_state.source = state.target
+                            next_state.source_finished = state.finished
+                            logger.info(f"🔗 Chained {len(state.target)} outputs: State{i} → State{i+1}")
+                        
+                        # Final stage result is our action
+                        if i == len(self.agent_states) - 1:
+                            action = stage_result
                     
-                    # Call agent.policy() and check intermediate pipeline results
-                    action = self.agent.policy(self.agent_states)
+                    # OLD CODE: Single policy call for entire pipeline (BROKEN)
+                    # action = self.agent.policy(self.agent_states)
                     
                     # DEBUG: After policy call, check if pipeline has processed data
                     if self.total_samples < 50000 and segment_finished:
